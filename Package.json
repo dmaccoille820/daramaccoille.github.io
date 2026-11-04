@@ -1,0 +1,10 @@
+{
+  "homepage":
+  "https://daramaccoille.github.io/dt-jeopardy",
+
+  "scripts": {
+    "dev":"vite",
+    "build":"vite build",
+    "deploy":"gh-pages -d dist"
+  }
+}
