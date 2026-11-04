@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@google/genai": "^0.1.2",
+    "@google/generative-ai": "^0.24.0",
     "@neondatabase/serverless": "^0.10.4",
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
