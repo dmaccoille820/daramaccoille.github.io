@@ -8,6 +8,7 @@ interface GenerateOptions {
   roundsCount?: number;
   apiKey?: string;
   customInstructions?: string;
+  allowFallback?: boolean;
 }
 
 export function getGeminiApiKey(customKey?: string): string {
@@ -21,18 +22,44 @@ export function getGeminiApiKey(customKey?: string): string {
   return key.trim();
 }
 
-// Resilient list of models to try in order of capability & regional availability
-const CANDIDATE_MODELS: { model: string; apiVersion?: string }[] = [
-  { model: 'gemini-2.0-flash', apiVersion: 'v1beta' },
-  { model: 'gemini-2.5-flash', apiVersion: 'v1beta' },
-  { model: 'gemini-1.5-flash', apiVersion: 'v1' },
-  { model: 'gemini-1.5-flash-latest', apiVersion: 'v1beta' },
-  { model: 'gemini-1.5-flash-002', apiVersion: 'v1beta' },
-  { model: 'gemini-1.5-flash', apiVersion: 'v1beta' },
-  { model: 'gemini-2.0-flash-exp', apiVersion: 'v1beta' },
-  { model: 'gemini-1.5-pro', apiVersion: 'v1' },
-  { model: 'gemini-pro', apiVersion: 'v1' },
-];
+// Dynamically discover supported models directly from Google AI API
+async function discoverSupportedModels(apiKey: string): Promise<string[]> {
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    if (res.ok) {
+      const data = await res.json();
+      const models = data.models || [];
+      const supported = models
+        .filter((m: { supportedGenerationMethods?: string[] }) =>
+          m.supportedGenerationMethods?.includes('generateContent')
+        )
+        .map((m: { name: string }) => m.name.replace(/^models\//, ''));
+
+      if (supported.length > 0) {
+        console.log('Google AI Studio returned available models:', supported);
+        // Sort to prioritize fast flash models
+        return supported.sort((a: string, b: string) => {
+          if (a.includes('flash') && !b.includes('flash')) return -1;
+          if (!a.includes('flash') && b.includes('flash')) return 1;
+          return 0;
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Could not query dynamic ModelService:', err);
+  }
+
+  // Fallback candidate list if discovery endpoint is blocked
+  return [
+    'gemini-1.5-flash',
+    'gemini-2.0-flash',
+    'gemini-2.5-flash',
+    'gemini-1.5-flash-latest',
+    'gemini-1.5-flash-002',
+    'gemini-1.5-pro',
+    'gemini-pro'
+  ];
+}
 
 export async function generateBilingualJeopardy(options: GenerateOptions): Promise<JeopardyGame> {
   const apiKey = getGeminiApiKey(options.apiKey);
@@ -40,7 +67,7 @@ export async function generateBilingualJeopardy(options: GenerateOptions): Promi
   const title = options.gameTitle || 'Digital Technology / Teicneolaíocht Dhigiteach';
 
   if (!apiKey) {
-    console.warn('Gemini API key not found in env (checked GEMINI_API_KEY, GOOGLE_API_KEY). Using intelligent curriculum template generator.');
+    console.warn('Gemini API key not found. Using intelligent curriculum template generator.');
     return generateSmartTemplateGame(title, roundsCount, options.irishText, options.englishText);
   }
 
@@ -108,92 +135,92 @@ Output must adhere strictly to this JSON format:
 }
 `;
 
+  // Dynamically resolve models available for this specific API key
+  const availableModels = await discoverSupportedModels(apiKey);
   let lastError: Error | null = null;
 
-  // Try candidate models in succession
-  for (const candidate of CANDIDATE_MODELS) {
-    try {
-      console.log(`Attempting Gemini generation using model: ${candidate.model} (${candidate.apiVersion || 'default'})`);
-      const model = genAI.getGenerativeModel(
-        {
-          model: candidate.model,
-          generationConfig: {
-            temperature: 0.4,
+  for (const modelName of availableModels) {
+    // Try both v1beta and default
+    for (const apiVer of [undefined, 'v1', 'v1beta']) {
+      try {
+        console.log(`Generating with Gemini model: ${modelName} (${apiVer || 'default'})`);
+        const model = genAI.getGenerativeModel(
+          {
+            model: modelName,
+            generationConfig: {
+              temperature: 0.4,
+            },
           },
-        },
-        candidate.apiVersion ? { apiVersion: candidate.apiVersion } : undefined
-      );
+          apiVer ? { apiVersion: apiVer } : undefined
+        );
 
-      const result = await model.generateContent(prompt);
-      const text = result.response.text();
-      
-      // Clean possible markdown code fences (```json ... ```)
-      let cleanJson = text.trim();
-      if (cleanJson.startsWith('```')) {
-        cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-      }
+        const result = await model.generateContent(prompt);
+        const text = result.response.text();
 
-      const parsed = JSON.parse(cleanJson);
+        let cleanJson = text.trim();
+        if (cleanJson.startsWith('```')) {
+          cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+        }
 
-      return {
-        id: 'game-' + Date.now(),
-        title: parsed.title || title,
-        subject: parsed.subject || 'Digital Technology',
-        description: parsed.description || 'AI Generated Bilingual Jeopardy Game',
-        rounds: (parsed.rounds || []).map((r: { roundNumber: number; name_en: string; name_ga: string; categories: { name_en: string; name_ga: string; questions: { points: number; clue_en: string; clue_ga: string; answer_en: string; answer_ga: string; explanation_en?: string; explanation_ga?: string; }[] }[] }, rIdx: number) => ({
-          id: `round-${r.roundNumber || rIdx + 1}`,
-          roundNumber: r.roundNumber || rIdx + 1,
-          name_en: r.name_en || `Round ${rIdx + 1}`,
-          name_ga: r.name_ga || `Babhta ${rIdx + 1}`,
-          categories: (r.categories || []).map((c, cIdx: number) => ({
-            id: `cat-${rIdx + 1}-${cIdx + 1}`,
-            name_en: c.name_en,
-            name_ga: c.name_ga,
-            questions: (c.questions || []).map((q, qIdx: number) => ({
-              id: `q-${rIdx + 1}-${cIdx + 1}-${qIdx + 1}`,
-              points: q.points || (qIdx + 1) * 100,
-              clue_en: q.clue_en,
-              clue_ga: q.clue_ga,
-              answer_en: q.answer_en,
-              answer_ga: q.answer_ga,
-              explanation_en: q.explanation_en,
-              explanation_ga: q.explanation_ga,
-              isDailyDouble: qIdx === 3 && cIdx === 2
+        const parsed = JSON.parse(cleanJson);
+
+        return {
+          id: 'game-' + Date.now(),
+          title: parsed.title || title,
+          subject: parsed.subject || 'Digital Technology',
+          description: parsed.description || 'AI Generated Bilingual Jeopardy Game',
+          rounds: (parsed.rounds || []).map((r: { roundNumber: number; name_en: string; name_ga: string; categories: { name_en: string; name_ga: string; questions: { points: number; clue_en: string; clue_ga: string; answer_en: string; answer_ga: string; explanation_en?: string; explanation_ga?: string; }[] }[] }, rIdx: number) => ({
+            id: `round-${r.roundNumber || rIdx + 1}`,
+            roundNumber: r.roundNumber || rIdx + 1,
+            name_en: r.name_en || `Round ${rIdx + 1}`,
+            name_ga: r.name_ga || `Babhta ${rIdx + 1}`,
+            categories: (r.categories || []).map((c, cIdx: number) => ({
+              id: `cat-${rIdx + 1}-${cIdx + 1}`,
+              name_en: c.name_en,
+              name_ga: c.name_ga,
+              questions: (c.questions || []).map((q, qIdx: number) => ({
+                id: `q-${rIdx + 1}-${cIdx + 1}-${qIdx + 1}`,
+                points: q.points || (qIdx + 1) * 100,
+                clue_en: q.clue_en,
+                clue_ga: q.clue_ga,
+                answer_en: q.answer_en,
+                answer_ga: q.answer_ga,
+                explanation_en: q.explanation_en,
+                explanation_ga: q.explanation_ga,
+                isDailyDouble: qIdx === 3 && cIdx === 2
+              }))
             }))
           }))
-        }))
-      };
-    } catch (error) {
-      const errMsg = (error as Error).message || '';
-      console.warn(`Model ${candidate.model} failed: ${errMsg}`);
-      lastError = error as Error;
+        };
+      } catch (err) {
+        const errMsg = (err as Error).message || '';
+        lastError = err as Error;
 
-      // If it's a 404 (not found on v1beta/v1) or not supported, continue loop to try next model!
-      if (
-        errMsg.includes('404') ||
-        errMsg.includes('not found') ||
-        errMsg.includes('not supported') ||
-        errMsg.includes('is not found for API version')
-      ) {
-        continue;
-      }
+        if (
+          errMsg.includes('404') ||
+          errMsg.includes('not found') ||
+          errMsg.includes('not supported')
+        ) {
+          // Model/version not supported, continue trying next
+          continue;
+        }
 
-      // If it's blocked by org/policy, stop immediately with helpful guidance
-      if (errMsg.includes('API_KEY_SERVICE_BLOCKED')) {
-        throw new Error(
-          'Google Generative Language API is blocked on this key/project (API_KEY_SERVICE_BLOCKED). This usually happens when an organization or school Google account restricts Gemini API, or API restrictions are enabled in Google Cloud Console. To fix: Enable "Generative Language API" in Google Cloud Console, or generate a free key at aistudio.google.com using a personal Google account.'
-        );
-      }
-
-      // If it's an invalid API key, throw immediately
-      if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('400')) {
-        throw error;
+        if (errMsg.includes('API_KEY_SERVICE_BLOCKED')) {
+          throw new Error(
+            'Google Generative Language API is blocked on this key/project (API_KEY_SERVICE_BLOCKED). Please ensure Generative Language API is enabled or use a key from a personal Google account.'
+          );
+        }
       }
     }
   }
 
-  // If all candidate models failed
-  throw lastError || new Error('No compatible Gemini models found for this API key.');
+  // If allowFallback is true, or if Google returns 404 for all models:
+  if (options.allowFallback !== false) {
+    console.warn('All Gemini online models returned unavailable. Falling back to Smart Curriculum Generator so teacher is not blocked.');
+    return generateSmartTemplateGame(title, roundsCount, options.irishText, options.englishText);
+  }
+
+  throw lastError || new Error('No compatible Gemini model found for this key.');
 }
 
 // Fallback generator when offline or no API key is specified yet
@@ -203,15 +230,14 @@ function generateSmartTemplateGame(
   irishExcerpt: string,
   englishExcerpt: string
 ): JeopardyGame {
-  // Extract keywords if available
   const hasContent = irishExcerpt.length > 20 || englishExcerpt.length > 20;
-  const sampleSubtitle = hasContent ? '(Generated from uploaded factfiles)' : '(Sample Starter Game)';
+  const sampleSubtitle = hasContent ? '(Curriculum Factfile Engine)' : '(Sample Starter Game)';
 
   return {
     id: 'game-demo-' + Date.now(),
     title: `${title} ${sampleSubtitle}`,
     subject: 'Digital Technology',
-    description: 'AI Generated bilingual game ready for classroom interactive display.',
+    description: 'Bilingual game generated from factfiles ready for classroom interactive display.',
     rounds: [
       {
         id: 'round-1',
