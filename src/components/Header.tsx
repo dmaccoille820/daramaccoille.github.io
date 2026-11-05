@@ -2,12 +2,12 @@
 
 import React from 'react';
 import { Language } from '@/types/jeopardy';
-import { Sparkles, UploadCloud, Gamepad2, Volume2, VolumeX, Database, RefreshCw, Languages } from 'lucide-react';
+import { UploadCloud, Gamepad2, Volume2, VolumeX, Database, RefreshCw, Languages, BookOpen } from 'lucide-react';
 import { soundEffects } from '@/lib/audio';
 
 interface HeaderProps {
-  currentView: 'game' | 'upload' | 'db';
-  onViewChange: (view: 'game' | 'upload' | 'db') => void;
+  currentView: 'game' | 'upload' | 'library';
+  onViewChange: (view: 'game' | 'upload' | 'library') => void;
   language: Language;
   onToggleLanguage: () => void;
   soundEnabled: boolean;
@@ -15,6 +15,7 @@ interface HeaderProps {
   gameTitle: string;
   isDbConnected: boolean;
   onResetGame?: () => void;
+  onOpenDbModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -26,7 +27,8 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSound,
   gameTitle,
   isDbConnected,
-  onResetGame
+  onResetGame,
+  onOpenDbModal,
 }) => {
   return (
     <header className="bg-jeopardy-deep/95 border-b border-jeopardy-board/40 backdrop-blur-md sticky top-0 z-40 px-4 py-3 shadow-lg shadow-black/50">
@@ -81,6 +83,18 @@ export const Header: React.FC<HeaderProps> = ({
             <UploadCloud className="w-4 h-4" />
             <span>{language === 'ga' ? 'Uaslódáil PDF & AI' : 'Teacher Upload'}</span>
           </button>
+
+          <button
+            onClick={() => onViewChange('library')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+              currentView === 'library'
+                ? 'bg-jeopardy-board text-white shadow-md shadow-blue-900/50'
+                : 'text-blue-300/80 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <BookOpen className="w-4 h-4" />
+            <span>{language === 'ga' ? 'Mo Leabharlann' : 'My Library'}</span>
+          </button>
         </div>
 
         {/* Action Controls & Hot Language Switcher */}
@@ -114,7 +128,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Database Status Button */}
           <button
-            onClick={() => onViewChange('db')}
+            onClick={() => onOpenDbModal?.()}
             title="Neon Database Connection & Schema"
             className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
               isDbConnected

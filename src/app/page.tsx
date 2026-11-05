@@ -9,6 +9,7 @@ import { QuestionModal } from '@/components/QuestionModal';
 import { ScoreBoard } from '@/components/ScoreBoard';
 import { TeacherUpload } from '@/components/TeacherUpload';
 import { DbStatusModal } from '@/components/DbStatusModal';
+import { GameLibrary } from '@/components/GameLibrary';
 import { soundEffects } from '@/lib/audio';
 
 export default function Home() {
@@ -16,7 +17,7 @@ export default function Home() {
   const [game, setGame] = useState<JeopardyGame>(sampleBilingualGame);
   const [currentRoundNumber, setCurrentRoundNumber] = useState<number>(1);
   const [language, setLanguage] = useState<Language>('ga'); // Defaults to Gaeilge
-  const [currentView, setCurrentView] = useState<'game' | 'upload' | 'db'>('game');
+  const [currentView, setCurrentView] = useState<'game' | 'upload' | 'library'>('game');
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
 
   // Active Question Modal State
@@ -83,6 +84,7 @@ export default function Home() {
     }
   };
 
+  // Called after upload/generation OR library load
   const handleGameCreated = (newGame: JeopardyGame) => {
     setGame(newGame);
     setCurrentRoundNumber(newGame.rounds[0]?.roundNumber || 1);
@@ -95,13 +97,7 @@ export default function Home() {
       {/* Top Navigation & Hot Switcher */}
       <Header
         currentView={currentView}
-        onViewChange={(view) => {
-          if (view === 'db') {
-            setIsDbModalOpen(true);
-          } else {
-            setCurrentView(view);
-          }
-        }}
+        onViewChange={setCurrentView}
         language={language}
         onToggleLanguage={handleToggleLanguage}
         soundEnabled={soundEnabled}
@@ -109,6 +105,7 @@ export default function Home() {
         gameTitle={game.title}
         isDbConnected={isDbConnected}
         onResetGame={handleResetBoard}
+        onOpenDbModal={() => setIsDbModalOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -132,6 +129,13 @@ export default function Home() {
               language={language}
             />
           </>
+        ) : currentView === 'library' ? (
+          /* My Games Library — browse and reload saved games from Neon */
+          <GameLibrary
+            language={language}
+            onGameLoaded={handleGameCreated}
+            isDbConnected={isDbConnected}
+          />
         ) : (
           /* Teacher Upload & AI Generation View */
           <TeacherUpload

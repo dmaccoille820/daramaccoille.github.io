@@ -208,6 +208,23 @@ export async function getGamesFromDb(): Promise<JeopardyGame[]> {
   }
 }
 
+// Delete a game (cascades to rounds → categories → questions)
+export async function deleteGameFromDb(
+  id: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!isDbConfigured()) {
+    return { success: false, error: 'DATABASE_URL/POSTGRES_URL is not set.' };
+  }
+  const sql = neon(getConnectionString());
+  try {
+    await sql`DELETE FROM games WHERE id = ${id}`;
+    return { success: true };
+  } catch (err) {
+    console.error('Error deleting game from Neon:', err);
+    return { success: false, error: (err as Error).message };
+  }
+}
+
 // Fetch single complete game by ID
 export async function getGameByIdFromDb(id: string): Promise<JeopardyGame | null> {
   if (id === sampleBilingualGame.id || !isDbConfigured()) {
