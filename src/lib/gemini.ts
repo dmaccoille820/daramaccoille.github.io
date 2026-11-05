@@ -21,6 +21,19 @@ export function getGeminiApiKey(customKey?: string): string {
   return key.trim();
 }
 
+// Resilient list of models to try in order of capability & regional availability
+const CANDIDATE_MODELS: { model: string; apiVersion?: string }[] = [
+  { model: 'gemini-2.0-flash', apiVersion: 'v1beta' },
+  { model: 'gemini-2.5-flash', apiVersion: 'v1beta' },
+  { model: 'gemini-1.5-flash', apiVersion: 'v1' },
+  { model: 'gemini-1.5-flash-latest', apiVersion: 'v1beta' },
+  { model: 'gemini-1.5-flash-002', apiVersion: 'v1beta' },
+  { model: 'gemini-1.5-flash', apiVersion: 'v1beta' },
+  { model: 'gemini-2.0-flash-exp', apiVersion: 'v1beta' },
+  { model: 'gemini-1.5-pro', apiVersion: 'v1' },
+  { model: 'gemini-pro', apiVersion: 'v1' },
+];
+
 export async function generateBilingualJeopardy(options: GenerateOptions): Promise<JeopardyGame> {
   const apiKey = getGeminiApiKey(options.apiKey);
   const roundsCount = Math.min(Math.max(options.roundsCount || 2, 1), 3);
@@ -32,14 +45,6 @@ export async function generateBilingualJeopardy(options: GenerateOptions): Promi
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  // Using gemini-1.5-flash or gemini-2.5-flash for speed and reliability
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.4,
-    }
-  });
 
   const prompt = `
 You are a bilingual Irish-English Master Educator specializing in Irish secondary curriculum (Leaving Certificate and Junior Cycle Digital Technology and Computer Science).
@@ -103,49 +108,92 @@ Output must adhere strictly to this JSON format:
 }
 `;
 
-  try {
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    const parsed = JSON.parse(text);
+  let lastError: Error | null = null;
 
-    return {
-      id: 'game-' + Date.now(),
-      title: parsed.title || title,
-      subject: parsed.subject || 'Digital Technology',
-      description: parsed.description || 'AI Generated Bilingual Jeopardy Game',
-      rounds: (parsed.rounds || []).map((r: { roundNumber: number; name_en: string; name_ga: string; categories: { name_en: string; name_ga: string; questions: { points: number; clue_en: string; clue_ga: string; answer_en: string; answer_ga: string; explanation_en?: string; explanation_ga?: string; }[] }[] }, rIdx: number) => ({
-        id: `round-${r.roundNumber || rIdx + 1}`,
-        roundNumber: r.roundNumber || rIdx + 1,
-        name_en: r.name_en || `Round ${rIdx + 1}`,
-        name_ga: r.name_ga || `Babhta ${rIdx + 1}`,
-        categories: (r.categories || []).map((c, cIdx: number) => ({
-          id: `cat-${rIdx + 1}-${cIdx + 1}`,
-          name_en: c.name_en,
-          name_ga: c.name_ga,
-          questions: (c.questions || []).map((q, qIdx: number) => ({
-            id: `q-${rIdx + 1}-${cIdx + 1}-${qIdx + 1}`,
-            points: q.points || (qIdx + 1) * 100,
-            clue_en: q.clue_en,
-            clue_ga: q.clue_ga,
-            answer_en: q.answer_en,
-            answer_ga: q.answer_ga,
-            explanation_en: q.explanation_en,
-            explanation_ga: q.explanation_ga,
-            isDailyDouble: qIdx === 3 && cIdx === 2
+  // Try candidate models in succession
+  for (const candidate of CANDIDATE_MODELS) {
+    try {
+      console.log(`Attempting Gemini generation using model: ${candidate.model} (${candidate.apiVersion || 'default'})`);
+      const model = genAI.getGenerativeModel(
+        {
+          model: candidate.model,
+          generationConfig: {
+            temperature: 0.4,
+          },
+        },
+        candidate.apiVersion ? { apiVersion: candidate.apiVersion } : undefined
+      );
+
+      const result = await model.generateContent(prompt);
+      const text = result.response.text();
+      
+      // Clean possible markdown code fences (```json ... ```)
+      let cleanJson = text.trim();
+      if (cleanJson.startsWith('```')) {
+        cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+      }
+
+      const parsed = JSON.parse(cleanJson);
+
+      return {
+        id: 'game-' + Date.now(),
+        title: parsed.title || title,
+        subject: parsed.subject || 'Digital Technology',
+        description: parsed.description || 'AI Generated Bilingual Jeopardy Game',
+        rounds: (parsed.rounds || []).map((r: { roundNumber: number; name_en: string; name_ga: string; categories: { name_en: string; name_ga: string; questions: { points: number; clue_en: string; clue_ga: string; answer_en: string; answer_ga: string; explanation_en?: string; explanation_ga?: string; }[] }[] }, rIdx: number) => ({
+          id: `round-${r.roundNumber || rIdx + 1}`,
+          roundNumber: r.roundNumber || rIdx + 1,
+          name_en: r.name_en || `Round ${rIdx + 1}`,
+          name_ga: r.name_ga || `Babhta ${rIdx + 1}`,
+          categories: (r.categories || []).map((c, cIdx: number) => ({
+            id: `cat-${rIdx + 1}-${cIdx + 1}`,
+            name_en: c.name_en,
+            name_ga: c.name_ga,
+            questions: (c.questions || []).map((q, qIdx: number) => ({
+              id: `q-${rIdx + 1}-${cIdx + 1}-${qIdx + 1}`,
+              points: q.points || (qIdx + 1) * 100,
+              clue_en: q.clue_en,
+              clue_ga: q.clue_ga,
+              answer_en: q.answer_en,
+              answer_ga: q.answer_ga,
+              explanation_en: q.explanation_en,
+              explanation_ga: q.explanation_ga,
+              isDailyDouble: qIdx === 3 && cIdx === 2
+            }))
           }))
         }))
-      }))
-    };
-  } catch (error) {
-    console.error('Gemini Generation failed:', error);
-    const msg = (error as Error).message || '';
-    if (msg.includes('API_KEY_SERVICE_BLOCKED')) {
-      throw new Error(
-        'Google Generative Language API is blocked on this key/project (API_KEY_SERVICE_BLOCKED). This usually happens when an organization or school Google account restricts Gemini API, or API restrictions are enabled in Google Cloud Console. To fix: Enable "Generative Language API" in Google Cloud Console, or generate a free key at aistudio.google.com using a personal Google account.'
-      );
+      };
+    } catch (error) {
+      const errMsg = (error as Error).message || '';
+      console.warn(`Model ${candidate.model} failed: ${errMsg}`);
+      lastError = error as Error;
+
+      // If it's a 404 (not found on v1beta/v1) or not supported, continue loop to try next model!
+      if (
+        errMsg.includes('404') ||
+        errMsg.includes('not found') ||
+        errMsg.includes('not supported') ||
+        errMsg.includes('is not found for API version')
+      ) {
+        continue;
+      }
+
+      // If it's blocked by org/policy, stop immediately with helpful guidance
+      if (errMsg.includes('API_KEY_SERVICE_BLOCKED')) {
+        throw new Error(
+          'Google Generative Language API is blocked on this key/project (API_KEY_SERVICE_BLOCKED). This usually happens when an organization or school Google account restricts Gemini API, or API restrictions are enabled in Google Cloud Console. To fix: Enable "Generative Language API" in Google Cloud Console, or generate a free key at aistudio.google.com using a personal Google account.'
+        );
+      }
+
+      // If it's an invalid API key, throw immediately
+      if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('400')) {
+        throw error;
+      }
     }
-    throw error;
   }
+
+  // If all candidate models failed
+  throw lastError || new Error('No compatible Gemini models found for this API key.');
 }
 
 // Fallback generator when offline or no API key is specified yet
