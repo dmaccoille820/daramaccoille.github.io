@@ -138,6 +138,12 @@ Output must adhere strictly to this JSON format:
     };
   } catch (error) {
     console.error('Gemini Generation failed:', error);
+    const msg = (error as Error).message || '';
+    if (msg.includes('API_KEY_SERVICE_BLOCKED')) {
+      throw new Error(
+        'Google Generative Language API is blocked on this key/project (API_KEY_SERVICE_BLOCKED). This usually happens when an organization or school Google account restricts Gemini API, or API restrictions are enabled in Google Cloud Console. To fix: Enable "Generative Language API" in Google Cloud Console, or generate a free key at aistudio.google.com using a personal Google account.'
+      );
+    }
     throw error;
   }
 }
