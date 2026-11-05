@@ -1,34 +1,51 @@
-import { neon, neonConfig } from '@neondatabase/serverless';
+import { neon } from '@neondatabase/serverless';
 import { JeopardyGame, Round, Category, Question } from '@/types/jeopardy';
 import { sampleBilingualGame } from '@/lib/sample-data';
 
-// Optional Neon connection string
-const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
+// Dynamically retrieve connection string from Vercel / Neon environment variables
+export function getConnectionString(): string {
+  const url =
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.POSTGRES_URL_NON_POOLING ||
+    process.env.DATABASE_URL_UNPOOLED ||
+    '';
+  return url.trim();
+}
 
 export function isDbConfigured(): boolean {
-  return Boolean(connectionString && connectionString.startsWith('postgres'));
+  const conn = getConnectionString();
+  return Boolean(
+    conn && (conn.startsWith('postgres://') || conn.startsWith('postgresql://'))
+  );
 }
 
 export function getDb() {
+  const conn = getConnectionString();
   if (!isDbConfigured()) {
     return null;
   }
-  return neon(connectionString);
+  return neon(conn);
 }
 
 // Ensure database tables exist
 export async function initDb(): Promise<{ success: boolean; message: string }> {
   if (!isDbConfigured()) {
-    return { success: false, message: 'DATABASE_URL is not configured in environment variables.' };
+    return {
+      success: false,
+      message: 'DATABASE_URL or POSTGRES_URL is not configured in environment variables.',
+    };
   }
 
-  const sql = neon(connectionString);
+  const sql = neon(getConnectionString());
   try {
-    await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+    // Both gen_random_uuid() and uuid_generate_v4() support
+    await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`.catch(() => {});
 
     await sql`
       CREATE TABLE IF NOT EXISTS games (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         title VARCHAR(255) NOT NULL,
         subject VARCHAR(100) DEFAULT 'Digital Technology',
         description TEXT,
@@ -40,7 +57,7 @@ export async function initDb(): Promise<{ success: boolean; message: string }> {
 
     await sql`
       CREATE TABLE IF NOT EXISTS rounds (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
         round_number INT NOT NULL,
         round_name_en VARCHAR(100) NOT NULL DEFAULT 'Jeopardy Round',
@@ -52,7 +69,7 @@ export async function initDb(): Promise<{ success: boolean; message: string }> {
 
     await sql`
       CREATE TABLE IF NOT EXISTS categories (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         round_id UUID NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
         name_en VARCHAR(255) NOT NULL,
         name_ga VARCHAR(255) NOT NULL,
@@ -63,7 +80,7 @@ export async function initDb(): Promise<{ success: boolean; message: string }> {
 
     await sql`
       CREATE TABLE IF NOT EXISTS questions (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         category_id UUID NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
         points INT NOT NULL,
         clue_en TEXT NOT NULL,
@@ -78,6 +95,18 @@ export async function initDb(): Promise<{ success: boolean; message: string }> {
       )
     `;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS game_sessions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+        language VARCHAR(10) NOT NULL DEFAULT 'ga',
+        current_round INT NOT NULL DEFAULT 1,
+        teams_state JSONB NOT NULL DEFAULT '[{"id":"1","name":"Foireann A","score":0},{"id":"2","name":"Foireann B","score":0}]'::jsonb,
+        answered_question_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
     return { success: true, message: 'Neon database tables verified and ready!' };
   } catch (error) {
     console.error('Error initializing database:', error);
@@ -86,12 +115,14 @@ export async function initDb(): Promise<{ success: boolean; message: string }> {
 }
 
 // Save complete bilingual game to Neon DB
-export async function saveGameToDb(game: JeopardyGame): Promise<{ success: boolean; gameId?: string; error?: string }> {
+export async function saveGameToDb(
+  game: JeopardyGame
+): Promise<{ success: boolean; gameId?: string; error?: string }> {
   if (!isDbConfigured()) {
-    return { success: false, error: 'DATABASE_URL is not set.' };
+    return { success: false, error: 'DATABASE_URL/POSTGRES_URL is not set.' };
   }
 
-  const sql = neon(connectionString);
+  const sql = neon(getConnectionString());
 
   try {
     // 1. Insert Game
@@ -151,7 +182,7 @@ export async function getGamesFromDb(): Promise<JeopardyGame[]> {
     return [sampleBilingualGame];
   }
 
-  const sql = neon(connectionString);
+  const sql = neon(getConnectionString());
   try {
     const games = await sql`
       SELECT id, title, subject, description, created_at
@@ -159,13 +190,17 @@ export async function getGamesFromDb(): Promise<JeopardyGame[]> {
       ORDER BY created_at DESC
     `;
 
+    if (!games || games.length === 0) {
+      return [sampleBilingualGame];
+    }
+
     return games.map((g) => ({
       id: g.id,
       title: g.title,
       subject: g.subject,
       description: g.description,
       rounds: [],
-      createdAt: g.created_at
+      createdAt: g.created_at,
     }));
   } catch (error) {
     console.error('Error fetching games from Neon:', error);
@@ -179,7 +214,7 @@ export async function getGameByIdFromDb(id: string): Promise<JeopardyGame | null
     return sampleBilingualGame;
   }
 
-  const sql = neon(connectionString);
+  const sql = neon(getConnectionString());
   try {
     const games = await sql`SELECT * FROM games WHERE id = ${id}`;
     if (!games.length) return null;
@@ -212,14 +247,14 @@ export async function getGameByIdFromDb(id: string): Promise<JeopardyGame | null
           answer_ga: q.answer_ga,
           explanation_en: q.explanation_en,
           explanation_ga: q.explanation_ga,
-          isDailyDouble: q.is_daily_double
+          isDailyDouble: q.is_daily_double,
         }));
 
         categories.push({
           id: c.id,
           name_en: c.name_en,
           name_ga: c.name_ga,
-          questions
+          questions,
         });
       }
 
@@ -228,7 +263,7 @@ export async function getGameByIdFromDb(id: string): Promise<JeopardyGame | null
         roundNumber: r.round_number,
         name_en: r.round_name_en,
         name_ga: r.round_name_ga,
-        categories
+        categories,
       });
     }
 
@@ -238,7 +273,7 @@ export async function getGameByIdFromDb(id: string): Promise<JeopardyGame | null
       subject: g.subject,
       description: g.description,
       rounds,
-      createdAt: g.created_at
+      createdAt: g.created_at,
     };
   } catch (error) {
     console.error('Error fetching game details from DB:', error);

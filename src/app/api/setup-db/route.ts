@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { initDb, isDbConfigured } from '@/lib/db/neon';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST() {
   if (!isDbConfigured()) {
     return NextResponse.json({

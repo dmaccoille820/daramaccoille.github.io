@@ -3,6 +3,8 @@ import { getGamesFromDb, saveGameToDb, isDbConfigured } from '@/lib/db/neon';
 import { sampleBilingualGame } from '@/lib/sample-data';
 import { JeopardyGame } from '@/types/jeopardy';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const games = await getGamesFromDb();

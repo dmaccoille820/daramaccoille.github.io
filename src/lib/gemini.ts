@@ -10,13 +10,24 @@ interface GenerateOptions {
   customInstructions?: string;
 }
 
+export function getGeminiApiKey(customKey?: string): string {
+  const key =
+    customKey ||
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY ||
+    process.env.GEMINI_API ||
+    '';
+  return key.trim();
+}
+
 export async function generateBilingualJeopardy(options: GenerateOptions): Promise<JeopardyGame> {
-  const apiKey = options.apiKey || process.env.GEMINI_API_KEY || '';
+  const apiKey = getGeminiApiKey(options.apiKey);
   const roundsCount = Math.min(Math.max(options.roundsCount || 2, 1), 3);
   const title = options.gameTitle || 'Digital Technology / Teicneolaíocht Dhigiteach';
 
   if (!apiKey) {
-    console.warn('GEMINI_API_KEY not found. Using intelligent curriculum template generator.');
+    console.warn('Gemini API key not found in env (checked GEMINI_API_KEY, GOOGLE_API_KEY). Using intelligent curriculum template generator.');
     return generateSmartTemplateGame(title, roundsCount, options.irishText, options.englishText);
   }
 

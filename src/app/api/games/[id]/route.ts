@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getGameByIdFromDb } from '@/lib/db/neon';
 import { sampleBilingualGame } from '@/lib/sample-data';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }

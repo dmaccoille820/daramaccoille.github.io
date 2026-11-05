@@ -4,6 +4,7 @@ import { saveGameToDb, isDbConfigured } from '@/lib/db/neon';
 import pdfParse from 'pdf-parse';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // Allow sufficient time for Gemini generation
 
 export async function POST(req: NextRequest) {
