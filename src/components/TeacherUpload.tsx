@@ -13,7 +13,10 @@ import {
   Key,
   Layers,
   HelpCircle,
-  BookOpen
+  BookOpen,
+  Check,
+  RefreshCw,
+  Zap
 } from 'lucide-react';
 
 interface TeacherUploadProps {
@@ -39,12 +42,21 @@ export const TeacherUpload: React.FC<TeacherUploadProps> = ({
   );
   const [apiKey, setApiKey] = useState('');
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
+  const [allowFallback, setAllowFallback] = useState(true);
 
   // Status & Progress
   const [loading, setLoading] = useState(false);
   const [progressStage, setProgressStage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [generatedGame, setGeneratedGame] = useState<JeopardyGame | null>(null);
+
+  // Key tester state
+  const [testingKey, setTestingKey] = useState(false);
+  const [keyTestStatus, setKeyTestStatus] = useState<{
+    ok?: boolean;
+    message?: string;
+    models?: string[];
+  } | null>(null);
 
   // Pre-fill sample factfile content for Digital Technology teachers
   const handleLoadSampleFactfiles = () => {
@@ -70,8 +82,37 @@ The binary system uses base 2 (0 and 1). With 3 bits, exactly 8 distinct values 
 The CPU (Central Processing Unit) is the computer's brain. It executes instructions through the Fetch-Decode-Execute cycle. The Arithmetic Logic Unit (ALU) performs all math and logic comparisons. Registers are small, ultra-fast memory locations inside the CPU. John von Neumann proposed the architecture where programs and data reside in the same memory.`);
   };
 
-  const handleGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleTestKey = async () => {
+    setTestingKey(true);
+    setKeyTestStatus(null);
+    try {
+      const res = await fetch('/api/gemini-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        const modelNames = (data.models || []).map((m: { name: string }) => m.name);
+        setKeyTestStatus({
+          ok: true,
+          message: `Connected! Google returned ${modelNames.length} supported models: ${modelNames.slice(0, 3).join(', ')}...`,
+          models: modelNames,
+        });
+      } else {
+        setKeyTestStatus({
+          ok: false,
+          message: data.error || 'Key check failed',
+        });
+      }
+    } catch (e) {
+      setKeyTestStatus({ ok: false, message: (e as Error).message });
+    } finally {
+      setTestingKey(false);
+    }
+  };
+
+  const executeGeneration = async (forceCurriculumEngine = false) => {
     setError(null);
     setLoading(true);
 
@@ -86,7 +127,7 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
       formData.append('gameTitle', gameTitle);
       formData.append('roundsCount', roundsCount.toString());
       formData.append('customInstructions', customInstructions);
-      if (apiKey) formData.append('apiKey', apiKey);
+      if (apiKey && !forceCurriculumEngine) formData.append('apiKey', apiKey);
 
       if (irishFile) formData.append('irishFile', irishFile);
       if (englishFile) formData.append('englishFile', englishFile);
@@ -95,8 +136,8 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
 
       setProgressStage(
         language === 'ga'
-          ? '2/3: Gemini AI ag cruthú ceisteanna dátheangacha Jeopardy...'
-          : '2/3: Gemini AI generating bilingual Jeopardy rounds & clues...'
+          ? '2/3: Ag cruthú ceisteanna dátheangacha Jeopardy...'
+          : '2/3: Generating aligned bilingual Jeopardy rounds & clues...'
       );
 
       const res = await fetch('/api/generate', {
@@ -131,6 +172,11 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
     }
   };
 
+  const handleGenerate = (e: React.FormEvent) => {
+    e.preventDefault();
+    executeGeneration(false);
+  };
+
   return (
     <div className="max-w-4xl mx-auto flex flex-col gap-6 animate-fade-in">
       {/* Header Banner */}
@@ -146,7 +192,7 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
           </div>
           <p className="text-sm text-blue-200/80 max-w-xl">
             {language === 'ga'
-              ? 'Uaslódáil PDF Gaeilge agus a aistriúchán díreach i mBéarla. Cruthóidh Gemini sraith iomlán de chatagóirí Jeopardy dátheangacha le stóráil i Neon DB.'
+              ? 'Uaslódáil PDF Gaeilge agus a aistriúchán díreach i mBéarla. Cruthóidh an córas sraith iomlán de chatagóirí Jeopardy dátheangacha le stóráil i Neon DB.'
               : 'Upload an Irish PDF factfile and its direct English translation. Gemini AI generates aligned bilingual Jeopardy categories ready for hot-switch classroom play.'}
           </p>
         </div>
@@ -187,11 +233,24 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
         </div>
       )}
 
-      {/* ERROR BANNER */}
+      {/* ERROR BANNER WITH QUICK FALLBACK BUTTON */}
       {error && (
-        <div className="p-4 rounded-xl bg-red-950/80 border border-red-500/50 text-red-200 flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
-          <div className="text-xs">{error}</div>
+        <div className="p-5 rounded-2xl bg-red-950/80 border-2 border-red-500/60 text-red-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl animate-pop-in">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="text-xs font-mono font-medium leading-relaxed">{error}</div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => executeGeneration(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-jeopardy-dark text-xs font-black uppercase tracking-wider shadow-gold-glow hover:scale-105 transition-all shrink-0 whitespace-nowrap"
+          >
+            <Zap className="w-4 h-4 fill-current" />
+            <span>Generate via Curriculum Engine</span>
+          </button>
         </div>
       )}
 
@@ -354,7 +413,7 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
               className="flex items-center gap-1.5 text-blue-300/80 hover:text-white"
             >
               <Key className="w-3.5 h-3.5 text-amber-400" />
-              <span>{showApiKeyInput ? 'Hide API Key' : 'Configure Custom Gemini API Key'}</span>
+              <span>{showApiKeyInput ? 'Hide API Key Settings' : 'Configure / Test Gemini API Key'}</span>
             </button>
 
             <span className="text-[11px] text-blue-300/60">
@@ -363,14 +422,42 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
           </div>
 
           {showApiKeyInput && (
-            <div className="mt-2 animate-fade-in">
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Paste Gemini API Key (or leave blank to use GEMINI_API_KEY environment variable)"
-                className="w-full px-3.5 py-2 rounded-xl bg-black/70 border border-amber-500/40 text-amber-200 placeholder-slate-500 text-xs focus:outline-none font-mono"
-              />
+            <div className="mt-2 flex flex-col gap-2 p-3 bg-black/50 rounded-xl border border-blue-500/30 animate-fade-in">
+              <div className="flex flex-col sm:flex-row items-center gap-2">
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Paste Gemini API Key (or leave blank to use GEMINI_API_KEY from Vercel)"
+                  className="flex-1 w-full px-3.5 py-2 rounded-xl bg-black/80 border border-amber-500/40 text-amber-200 placeholder-slate-500 text-xs focus:outline-none font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={handleTestKey}
+                  disabled={testingKey}
+                  className="px-4 py-2 rounded-xl bg-blue-900/80 hover:bg-blue-800 text-blue-200 text-xs font-bold border border-blue-400/40 flex items-center gap-1.5 shrink-0"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${testingKey ? 'animate-spin' : ''}`} />
+                  <span>Test Key</span>
+                </button>
+              </div>
+
+              {keyTestStatus && (
+                <div
+                  className={`p-2.5 rounded-lg text-xs font-mono flex items-start gap-2 ${
+                    keyTestStatus.ok
+                      ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-red-950/80 text-red-300 border border-red-500/40'
+                  }`}
+                >
+                  {keyTestStatus.ok ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  )}
+                  <span>{keyTestStatus.message}</span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -386,11 +473,11 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
             <span>
               {loading
                 ? language === 'ga'
-                  ? 'Gemini AI ag Cruthú Ceisteanna...'
-                  : 'Gemini AI Generating Questions...'
+                  ? 'Ag Cruthú Ceisteanna...'
+                  : 'Generating Questions...'
                 : language === 'ga'
-                ? 'Cruthaigh Cluiche Dátheangach le Gemini'
-                : 'Generate Bilingual Jeopardy with Gemini'}
+                ? 'Cruthaigh Cluiche Dátheangach'
+                : 'Generate Bilingual Jeopardy'}
             </span>
           </button>
 
