@@ -35,6 +35,8 @@ export interface JeopardyGame {
   description?: string;
   rounds: Round[];
   createdAt?: string;
+  fallbackUsed?: boolean;
+  generationSource?: 'gemini' | 'curriculum-engine';
 }
 
 export interface Team {

@@ -46,8 +46,10 @@ export const TeacherUpload: React.FC<TeacherUploadProps> = ({
 
   // Status & Progress
   const [loading, setLoading] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [progressStage, setProgressStage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  const [isTimeoutOrOverloadError, setIsTimeoutOrOverloadError] = useState(false);
   const [generatedGame, setGeneratedGame] = useState<JeopardyGame | null>(null);
 
   // Key tester state
@@ -57,6 +59,44 @@ export const TeacherUpload: React.FC<TeacherUploadProps> = ({
     message?: string;
     models?: string[];
   } | null>(null);
+
+  // Live timer and dynamic stage transitions during generation
+  React.useEffect(() => {
+    let timer: NodeJS.Timeout | null = null;
+    if (loading) {
+      setElapsedSeconds(0);
+      timer = setInterval(() => {
+        setElapsedSeconds((prev) => {
+          const next = prev + 1;
+          if (next === 3) {
+            setProgressStage(
+              language === 'ga'
+                ? '2/3: Ag glaoch ar Gemini Flash & ag ailíniú ceisteanna...'
+                : '2/3: Communicating with Gemini Flash & generating bilingual clues...'
+            );
+          } else if (next === 10) {
+            setProgressStage(
+              language === 'ga'
+                ? '2/3: Gemini ag próiseáil (cúltaca uathoibríoch ar fáil má bhíonn moill)...'
+                : '2/3: Gemini processing (automatic exponential backoff active if congested)...'
+            );
+          } else if (next === 20) {
+            setProgressStage(
+              language === 'ga'
+                ? '2/3: Ag seiceáil freagairt Gemini roimh an sprioc-am...'
+                : '2/3: Finalizing Gemini generation before gateway timeout window...'
+            );
+          }
+          return next;
+        });
+      }, 1000);
+    } else {
+      setElapsedSeconds(0);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [loading, language]);
 
   // Pre-fill sample factfile content for Digital Technology teachers
   const handleLoadSampleFactfiles = () => {
@@ -114,6 +154,7 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
 
   const executeGeneration = async (forceCurriculumEngine = false) => {
     setError(null);
+    setIsTimeoutOrOverloadError(false);
     setLoading(true);
 
     try {
@@ -127,7 +168,11 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
       formData.append('gameTitle', gameTitle);
       formData.append('roundsCount', roundsCount.toString());
       formData.append('customInstructions', customInstructions);
-      if (apiKey && !forceCurriculumEngine) formData.append('apiKey', apiKey);
+      if (forceCurriculumEngine) {
+        formData.append('forceCurriculumEngine', 'true');
+      } else if (apiKey) {
+        formData.append('apiKey', apiKey);
+      }
 
       if (irishFile) formData.append('irishFile', irishFile);
       if (englishFile) formData.append('englishFile', englishFile);
@@ -135,9 +180,9 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
       if (englishText) formData.append('englishText', englishText);
 
       setProgressStage(
-        language === 'ga'
-          ? '2/3: Ag cruthú ceisteanna dátheangacha Jeopardy...'
-          : '2/3: Generating aligned bilingual Jeopardy rounds & clues...'
+        forceCurriculumEngine
+          ? (language === 'ga' ? '2/3: Inneall Curaclaim ag ailíniú ceisteanna...' : '2/3: Curriculum Engine assembling factfile questions...')
+          : (language === 'ga' ? '2/3: Ag glaoch ar Gemini Flash (cúltaca uathoibríoch ar 503/504)...' : '2/3: Generating bilingual clues with Gemini Flash (automatic backoff on 503/504)...')
       );
 
       const res = await fetch('/api/generate', {
@@ -147,7 +192,12 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `Server responded with status ${res.status}`);
+        const status = res.status;
+        const msg = errData.error || (status === 504 ? 'Gateway Timeout (504): Gemini generation exceeded proxy limit' : status === 503 ? 'Service Unavailable (503): Gemini model is temporarily overloaded' : `Server responded with status ${status}`);
+        if (status === 503 || status === 504 || msg.includes('503') || msg.includes('504') || msg.toLowerCase().includes('timeout') || msg.toLowerCase().includes('overloaded')) {
+          setIsTimeoutOrOverloadError(true);
+        }
+        throw new Error(msg);
       }
 
       setProgressStage(
@@ -165,7 +215,11 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
       onGameCreated(data.game);
     } catch (err) {
       console.error(err);
-      setError((err as Error).message);
+      const errMsg = (err as Error).message || '';
+      if (errMsg.includes('503') || errMsg.includes('504') || errMsg.toLowerCase().includes('timeout') || errMsg.toLowerCase().includes('overloaded')) {
+        setIsTimeoutOrOverloadError(true);
+      }
+      setError(errMsg);
     } finally {
       setLoading(false);
       setProgressStage('');
@@ -214,9 +268,20 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
           <div className="flex items-center gap-3">
             <CheckCircle2 className="w-7 h-7 text-emerald-400 shrink-0" />
             <div>
-              <h4 className="font-bold text-white text-base">
-                {language === 'ga' ? 'Cluiche Nua Cruthaithe go hIontach!' : 'Bilingual Game Created Successfully!'}
-              </h4>
+              <div className="flex items-center gap-2">
+                <h4 className="font-bold text-white text-base">
+                  {language === 'ga' ? 'Cluiche Nua Cruthaithe go hIontach!' : 'Bilingual Game Created Successfully!'}
+                </h4>
+                {generatedGame.fallbackUsed ? (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30">
+                    Curriculum Engine Mode
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                    Gemini AI Generated
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-emerald-300/80">
                 {generatedGame.title} • {generatedGame.rounds.length}{' '}
                 {language === 'ga' ? 'babhta(í) réidh le himirt' : 'round(s) ready to play'}
@@ -233,24 +298,54 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
         </div>
       )}
 
-      {/* ERROR BANNER WITH QUICK FALLBACK BUTTON */}
+      {/* ERROR BANNER WITH SPECIFIC 503/504 BACKOFF & FALLBACK CONTROLS */}
       {error && (
-        <div className="p-5 rounded-2xl bg-red-950/80 border-2 border-red-500/60 text-red-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl animate-pop-in">
+        <div className="p-5 rounded-2xl bg-red-950/90 border-2 border-red-500/70 text-red-100 flex flex-col gap-3 shadow-2xl animate-pop-in">
           <div className="flex items-start gap-3">
-            <AlertCircle className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
+            <AlertCircle className="w-6 h-6 text-amber-400 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <div className="text-xs font-mono font-medium leading-relaxed">{error}</div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-bold text-sm text-white">
+                  {isTimeoutOrOverloadError
+                    ? (language === 'ga' ? 'Gemini Gnóthach nó Moill (503/504)' : 'Gemini AI Overloaded or Timed Out (503/504)')
+                    : (language === 'ga' ? 'Earráid Ghiniúna' : 'Generation Error')}
+                </span>
+                {isTimeoutOrOverloadError && (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/30 text-amber-200 border border-amber-400/50">
+                    Transient AI Traffic Spike
+                  </span>
+                )}
+              </div>
+              <div className="text-xs font-mono text-red-200/90 leading-relaxed mb-2">
+                {error}
+              </div>
+              <p className="text-xs text-amber-200/90">
+                {isTimeoutOrOverloadError
+                  ? 'The Gemini service is experiencing high traffic or took longer than the serverless timeout. You can retry with exponential backoff, or generate instantly using the built-in Curriculum Engine with your factfiles.'
+                  : 'You can retry or generate immediately with the built-in Curriculum Engine.'}
+              </p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => executeGeneration(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-jeopardy-dark text-xs font-black uppercase tracking-wider shadow-gold-glow hover:scale-105 transition-all shrink-0 whitespace-nowrap"
-          >
-            <Zap className="w-4 h-4 fill-current" />
-            <span>Generate via Curriculum Engine</span>
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-red-500/20">
+            <button
+              type="button"
+              onClick={() => executeGeneration(false)}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-900/80 hover:bg-blue-800 text-blue-200 text-xs font-bold border border-blue-400/40 transition-all hover:scale-105"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry Gemini (with Backoff)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => executeGeneration(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-400 hover:to-yellow-300 text-jeopardy-dark text-xs font-black uppercase tracking-wider shadow-gold-glow hover:scale-105 transition-all whitespace-nowrap"
+            >
+              <Zap className="w-4 h-4 fill-current" />
+              <span>⚡ Generate Instantly (Curriculum Engine)</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -462,29 +557,40 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
           )}
         </div>
 
-        {/* SUBMIT BUTTON WITH LIVE PROGRESS */}
+        {/* SUBMIT BUTTON WITH LIVE PROGRESS & TIME ELAPSED */}
         <div className="flex flex-col items-center gap-3">
           <button
             type="submit"
             disabled={loading || (!irishFile && !irishText && !englishFile && !englishText)}
             className="w-full sm:w-auto px-8 py-4 rounded-2xl font-jeopardy text-lg sm:text-xl font-black uppercase tracking-wider bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-600 hover:from-amber-400 hover:to-yellow-300 text-jeopardy-dark shadow-gold-glow hover:scale-105 active:scale-95 disabled:opacity-40 disabled:scale-100 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3"
           >
-            <Sparkles className="w-6 h-6 animate-pulse" />
+            {loading ? (
+              <RefreshCw className="w-6 h-6 animate-spin text-jeopardy-dark" />
+            ) : (
+              <Sparkles className="w-6 h-6 animate-pulse" />
+            )}
             <span>
               {loading
                 ? language === 'ga'
-                  ? 'Ag Cruthú Ceisteanna...'
-                  : 'Generating Questions...'
+                  ? `Ag Cruthú Ceisteanna (${elapsedSeconds}s)...`
+                  : `Generating Questions (${elapsedSeconds}s)...`
                 : language === 'ga'
                 ? 'Cruthaigh Cluiche Dátheangach'
                 : 'Generate Bilingual Jeopardy'}
             </span>
           </button>
 
-          {loading && progressStage && (
-            <div className="flex items-center gap-2 text-xs font-mono font-bold text-amber-300 animate-pulse">
-              <span className="w-2 h-2 rounded-full bg-amber-400" />
-              <span>{progressStage}</span>
+          {loading && (
+            <div className="flex flex-col items-center gap-1.5 animate-fade-in text-center">
+              <div className="flex items-center gap-2 text-xs font-mono font-bold text-amber-300">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+                <span>{progressStage}</span>
+              </div>
+              <span className="text-[11px] text-blue-300/70">
+                {language === 'ga'
+                  ? 'Uath-chúiteamh agus cúltaca ar fáil má bhíonn freastalaí Gemini gafa.'
+                  : 'Automatic backoff and curriculum engine safety fallback active.'}
+              </span>
             </div>
           )}
         </div>

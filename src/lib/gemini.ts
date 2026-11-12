@@ -9,9 +9,11 @@ interface GenerateOptions {
   apiKey?: string;
   customInstructions?: string;
   allowFallback?: boolean;
+  onProgress?: (stage: string) => void;
 }
 
 export function getGeminiApiKey(customKey?: string): string {
+  if (customKey === 'SKIP_GEMINI') return '';
   const key =
     customKey ||
     process.env.GEMINI_API_KEY ||
@@ -20,6 +22,30 @@ export function getGeminiApiKey(customKey?: string): string {
     process.env.GEMINI_API ||
     '';
   return key.trim();
+}
+
+// Sleep helper for backoff
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Detect transient errors eligible for retry with backoff (503, 504, 429, overload, network)
+function isRetryableGeminiError(errorMsg: string): boolean {
+  const lower = errorMsg.toLowerCase();
+  return (
+    lower.includes('503') ||
+    lower.includes('504') ||
+    lower.includes('429') ||
+    lower.includes('overloaded') ||
+    lower.includes('resource has been exhausted') ||
+    lower.includes('temporarily unavailable') ||
+    lower.includes('service unavailable') ||
+    lower.includes('gateway timeout') ||
+    lower.includes('deadline exceeded') ||
+    lower.includes('fetch failed') ||
+    lower.includes('econnreset') ||
+    lower.includes('etimedout')
+  );
 }
 
 // Dynamically discover supported models directly from Google AI API
@@ -51,13 +77,11 @@ async function discoverSupportedModels(apiKey: string): Promise<string[]> {
 
   // Fallback candidate list if discovery endpoint is blocked
   return [
-    'gemini-1.5-flash',
     'gemini-2.0-flash',
+    'gemini-1.5-flash',
     'gemini-2.5-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-flash-002',
-    'gemini-1.5-pro',
-    'gemini-pro'
+    'gemini-1.5-flash-8b',
+    'gemini-1.5-pro'
   ];
 }
 
@@ -80,30 +104,32 @@ You will analyze two provided factfiles:
 2. Factfile in English
 
 Generate an authentic, exciting bilingual Jeopardy game with exactly ${roundsCount} round(s).
-Crucial rules:
+Crucial rules for fast, high-quality generation:
 1. Every category must have an accurate English name and authentic Irish name (using standard Téarma.ie terminology).
-2. For every question:
-   - "points": 100, 200, 300, 400, 500 for Round 1 (or 200, 400, 600, 800, 1000 for Round 2).
-   - "clue_en": A crisp Jeopardy clue statement in English.
+2. For each round, create 4 distinct categories. Each category must have exactly 5 questions with point values:
+   - Round 1: 100, 200, 300, 400, 500
+   - Round 2: 200, 400, 600, 800, 1000
+3. For every question provide:
+   - "points": number
+   - "clue_en": A crisp Jeopardy clue statement in English (maximum 20 words).
    - "clue_ga": The direct, accurate Irish translation of that exact clue statement.
    - "answer_en": Phrased as a question in English ("What is...", "Who is...", "What are...").
    - "answer_ga": Phrased as a question in Irish ("Cad é...", "Céard é...", "Cé hé/hí...", "Cad iad...").
-   - "explanation_en": Short 1-sentence context explanation.
-   - "explanation_ga": Short 1-sentence context explanation in Irish.
-3. For Round 1 and Round 2, produce 4 to 5 categories, each with 5 ascending difficulty questions.
-4. If Round 3 is requested, it can be "Final Jeopardy" with 1 high-value grand category and question.
-5. The English and Irish clues MUST correspond to the exact same concept so the teacher can press the "Hot Switch Language" button mid-question and switch seamlessly.
+   - "explanation_en": Brief 1-sentence context explanation.
+   - "explanation_ga": Brief 1-sentence context explanation in Irish.
+4. The English and Irish clues MUST correspond to the exact same concept so the teacher can press the "Hot Switch Language" button mid-question and switch seamlessly.
+5. Keep clues and answers concise and punchy so they render quickly and clearly in class.
 
 Additional Teacher Instructions:
 ${options.customInstructions || 'Focus on fundamental digital technology concepts from the factfiles.'}
 
 Factfile (English):
-${options.englishText.slice(0, 12000)}
+${options.englishText.slice(0, 8000)}
 
 Factfile (Gaeilge):
-${options.irishText.slice(0, 12000)}
+${options.irishText.slice(0, 8000)}
 
-Output must adhere strictly to this JSON format:
+Output must adhere strictly to this JSON format (pure JSON only, no markdown wrapping):
 {
   "title": "${title}",
   "subject": "Digital Technology",
@@ -135,26 +161,48 @@ Output must adhere strictly to this JSON format:
 }
 `;
 
-  // Dynamically resolve models available for this specific API key
-  const availableModels = await discoverSupportedModels(apiKey);
-  let lastError: Error | null = null;
+  // Start with high-speed models that support fast JSON responses
+  const primaryModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-8b'];
+  let candidateModels = primaryModels;
 
-  for (const modelName of availableModels) {
-    // Try both v1beta and default
-    for (const apiVer of [undefined, 'v1', 'v1beta']) {
+  let lastError: Error | null = null;
+  const startTime = Date.now();
+  // Gateway safety deadline: don't let calls exceed 28 seconds to prevent HTTP 504
+  const MAX_ONLINE_WINDOW_MS = 28000;
+
+  for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+    const modelName = candidateModels[mIdx];
+
+    // If approaching server gateway timeout limit, break out and fall back safely
+    if (Date.now() - startTime > MAX_ONLINE_WINDOW_MS) {
+      console.warn(`Approaching gateway timeout limit (${Date.now() - startTime}ms). Safe fallback triggered.`);
+      break;
+    }
+
+    // Attempt generation with backoff (up to 2 retries on 503/429/timeout)
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (Date.now() - startTime > MAX_ONLINE_WINDOW_MS) break;
+
       try {
-        console.log(`Generating with Gemini model: ${modelName} (${apiVer || 'default'})`);
-        const model = genAI.getGenerativeModel(
-          {
-            model: modelName,
-            generationConfig: {
-              temperature: 0.4,
-            },
+        console.log(`[Gemini] Attempting ${modelName} (attempt ${attempt + 1}/${MAX_RETRIES + 1})...`);
+        options.onProgress?.(`Contacting Gemini (${modelName})...`);
+
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: 'application/json',
           },
-          apiVer ? { apiVersion: apiVer } : undefined
+        });
+
+        // Run with an internal promise timeout per call
+        const generatePromise = model.generateContent(prompt);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Model response timed out (504 limit protection)')), 22000)
         );
 
-        const result = await model.generateContent(prompt);
+        const result = await Promise.race([generatePromise, timeoutPromise]);
         const text = result.response.text();
 
         let cleanJson = text.trim();
@@ -169,6 +217,8 @@ Output must adhere strictly to this JSON format:
           title: parsed.title || title,
           subject: parsed.subject || 'Digital Technology',
           description: parsed.description || 'AI Generated Bilingual Jeopardy Game',
+          fallbackUsed: false,
+          generationSource: 'gemini',
           rounds: (parsed.rounds || []).map((r: { roundNumber: number; name_en: string; name_ga: string; categories: { name_en: string; name_ga: string; questions: { points: number; clue_en: string; clue_ga: string; answer_en: string; answer_ga: string; explanation_en?: string; explanation_ga?: string; }[] }[] }, rIdx: number) => ({
             id: `round-${r.roundNumber || rIdx + 1}`,
             roundNumber: r.roundNumber || rIdx + 1,
@@ -195,32 +245,44 @@ Output must adhere strictly to this JSON format:
       } catch (err) {
         const errMsg = (err as Error).message || '';
         lastError = err as Error;
-
-        if (
-          errMsg.includes('404') ||
-          errMsg.includes('not found') ||
-          errMsg.includes('not supported')
-        ) {
-          // Model/version not supported, continue trying next
-          continue;
-        }
+        console.warn(`[Gemini] ${modelName} error on attempt ${attempt + 1}:`, errMsg);
 
         if (errMsg.includes('API_KEY_SERVICE_BLOCKED')) {
           throw new Error(
-            'Google Generative Language API is blocked on this key/project (API_KEY_SERVICE_BLOCKED). Please ensure Generative Language API is enabled or use a key from a personal Google account.'
+            'Google Generative Language API is blocked on this key/project (API_KEY_SERVICE_BLOCKED). Please ensure Generative Language API is enabled in Google Cloud Console or use a key from a personal Google account.'
           );
         }
+
+        // If it's a 404 or unsupported model, don't retry this model, jump to next candidate
+        if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('not supported')) {
+          break;
+        }
+
+        // If it's 503 (overloaded) or 504 (timeout) or 429 (rate-limited), apply exponential backoff
+        if (isRetryableGeminiError(errMsg) && attempt < MAX_RETRIES) {
+          const backoffMs = Math.min(1200 * Math.pow(1.8, attempt) + Math.random() * 400, 3500);
+          console.log(`[Gemini Backoff] 503/504/429 detected. Backing off for ${Math.round(backoffMs)}ms before retry...`);
+          options.onProgress?.(`Gemini is busy (503/overloaded). Backing off for ${Math.round(backoffMs / 1000)}s...`);
+          await sleep(backoffMs);
+          continue; // Retry same model
+        }
+
+        // If retries exhausted for this model, try next candidate model
+        break;
       }
     }
   }
 
-  // If allowFallback is true, or if Google returns 404 for all models:
+  // If online models returned 503/504 or were unavailable and allowFallback is true:
   if (options.allowFallback !== false) {
-    console.warn('All Gemini online models returned unavailable. Falling back to Smart Curriculum Generator so teacher is not blocked.');
-    return generateSmartTemplateGame(title, roundsCount, options.irishText, options.englishText);
+    console.warn('Gemini online service unavailable or timed out (503/504). Automatically falling back to Curriculum Engine so classroom play is never blocked.');
+    const fallbackGame = generateSmartTemplateGame(title, roundsCount, options.irishText, options.englishText);
+    fallbackGame.fallbackUsed = true;
+    fallbackGame.generationSource = 'curriculum-engine';
+    return fallbackGame;
   }
 
-  throw lastError || new Error('No compatible Gemini model found for this key.');
+  throw lastError || new Error('Gemini service unavailable (503/504). Please try again or use Curriculum Engine.');
 }
 
 // Fallback generator when offline or no API key is specified yet
@@ -237,7 +299,9 @@ function generateSmartTemplateGame(
     id: 'game-demo-' + Date.now(),
     title: `${title} ${sampleSubtitle}`,
     subject: 'Digital Technology',
-    description: 'Bilingual game generated from factfiles ready for classroom interactive display.',
+    description: 'Bilingual game generated from curriculum factfiles ready for classroom interactive display.',
+    fallbackUsed: true,
+    generationSource: 'curriculum-engine',
     rounds: [
       {
         id: 'round-1',

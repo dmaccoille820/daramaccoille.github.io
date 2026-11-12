@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
     let customInstructions = '';
     let apiKey = '';
     let autoSave = true;
+    let forceCurriculumEngine = false;
 
     const contentType = req.headers.get('content-type') || '';
 
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
       customInstructions = (formData.get('customInstructions') as string) || '';
       apiKey = (formData.get('apiKey') as string) || '';
       autoSave = formData.get('autoSave') !== 'false';
+      forceCurriculumEngine = formData.get('forceCurriculumEngine') === 'true';
 
       // Parse Irish File
       const irishFile = formData.get('irishFile') as File | null;
@@ -77,16 +79,18 @@ export async function POST(req: NextRequest) {
       customInstructions = body.customInstructions || '';
       apiKey = body.apiKey || '';
       autoSave = body.autoSave !== false;
+      forceCurriculumEngine = !!body.forceCurriculumEngine;
     }
 
-    // Generate bilingual jeopardy game using Gemini
+    // Generate bilingual jeopardy game using Gemini (or force curriculum engine)
     const game = await generateBilingualJeopardy({
       irishText,
       englishText,
       gameTitle,
       roundsCount,
-      apiKey,
-      customInstructions
+      apiKey: forceCurriculumEngine ? 'SKIP_GEMINI' : apiKey,
+      customInstructions,
+      allowFallback: true
     });
 
     let savedToDb = false;
