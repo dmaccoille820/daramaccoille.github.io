@@ -32,7 +32,7 @@ export const TeacherUpload: React.FC<TeacherUploadProps> = ({
 }) => {
   // Form state
   const [gameTitle, setGameTitle] = useState('Digital Technology / Teicneolaíocht Dhigiteach');
-  const [roundsCount, setRoundsCount] = useState<number>(2);
+  const [roundsCount, setRoundsCount] = useState<number>(3);
   const [irishFile, setIrishFile] = useState<File | null>(null);
   const [englishFile, setEnglishFile] = useState<File | null>(null);
   const [irishText, setIrishText] = useState('');

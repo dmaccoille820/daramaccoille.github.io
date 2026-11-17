@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
     let irishText = '';
     let englishText = '';
     let gameTitle = 'Digital Technology / Teicneolaíocht Dhigiteach';
-    let roundsCount = 2;
+    let roundsCount = 3;
     let customInstructions = '';
     let apiKey = '';
     let autoSave = true;
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     if (contentType.includes('multipart/form-data')) {
       const formData = await req.formData();
       gameTitle = (formData.get('gameTitle') as string) || gameTitle;
-      roundsCount = parseInt((formData.get('roundsCount') as string) || '2', 10);
+      roundsCount = parseInt((formData.get('roundsCount') as string) || '3', 10);
       customInstructions = (formData.get('customInstructions') as string) || '';
       apiKey = (formData.get('apiKey') as string) || '';
       autoSave = formData.get('autoSave') !== 'false';
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
       irishText = body.irishText || '';
       englishText = body.englishText || '';
       gameTitle = body.gameTitle || gameTitle;
-      roundsCount = body.roundsCount || 2;
+      roundsCount = body.roundsCount || 3;
       customInstructions = body.customInstructions || '';
       apiKey = body.apiKey || '';
       autoSave = body.autoSave !== false;
