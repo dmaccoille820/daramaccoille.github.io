@@ -30,8 +30,8 @@ export const TeacherUpload: React.FC<TeacherUploadProps> = ({
   language,
   isDbConnected,
 }) => {
-  // Form state
-  const [gameTitle, setGameTitle] = useState('Digital Technology / Teicneolaíocht Dhigiteach');
+  // Form state — start empty so teacher enters their own topic
+  const [gameTitle, setGameTitle] = useState('');
   const [gameDescription, setGameDescription] = useState('');
   const [roundsCount, setRoundsCount] = useState<number>(3);
   const [irishFile, setIrishFile] = useState<File | null>(null);

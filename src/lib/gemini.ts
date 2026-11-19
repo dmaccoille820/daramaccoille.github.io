@@ -169,10 +169,16 @@ export async function generateBilingualJeopardy(options: GenerateOptions): Promi
     ];
     const roundLabel = ['Jeopardy Round', 'Double Jeopardy Round', 'Final Jeopardy Round'][roundIndex];
     const roundLabelGa = ['Babhta 1: Jeopardy', 'Babhta 2: Jeopardy Dúbailte', 'Babhta 3: Jeopardy Deiridh'][roundIndex];
+    const roundFocus = [
+      'Focus strictly on FOUNDATIONAL CONCEPTS, DEFINITIONS, CORE VOCABULARY, and PRIMARY STRUCTURES from the content.',
+      'Focus strictly on PROCESSES, MECHANISMS, SYSTEMS, COMPARISONS, and FUNCTIONAL RELATIONSHIPS from the content.',
+      'Focus strictly on ADVANCED APPLICATIONS, CASE STUDIES, SYNTHESIS, PROBLEM-SOLVING, and IMPACT/SIGNIFICANCE from the content.',
+    ][roundIndex];
 
     return `You are a bilingual Irish-English Master Educator for the Irish secondary curriculum (Junior Cycle & Leaving Certificate).
 
 TASK: Generate ROUND ${roundNum} ONLY of a ${roundsCount}-round bilingual Jeopardy game.
+ROUND PEDAGOGICAL FOCUS: ${roundFocus}
 
 GAME CONTEXT:
 - Title / Ábhar: "${titlePrompt}"
@@ -180,12 +186,15 @@ ${userDescription ? `- Description / Cur Síos: "${userDescription}"` : ''}
 ${customInstructions ? `- Teacher's Custom Instructions (Treoracha Breise): "${customInstructions}"` : ''}
 ${options.sourceFiles && options.sourceFiles.length > 0 ? `- Attached Source Files: ${options.sourceFiles.map((f) => `${f.name} (${f.language.toUpperCase()})`).join(', ')}` : ''}
 
-${hasFactfiles ? `CURRICULUM FACTFILES (extract ALL questions from this content ONLY):
+${hasFactfiles ? `CURRICULUM FACTFILES (extract ALL 4 categories and 20 questions from this content ONLY):
 ${englishText ? `--- ENGLISH FACTFILE ---\n${englishText.slice(0, 10000)}\n` : ''}
 ${irishText ? `--- GAEILGE (IRISH) FACTFILE ---\n${irishText.slice(0, 10000)}\n` : ''}
-CRITICAL: Every clue MUST be drawn directly from the factfile content above. Do NOT use generic Digital Technology or Computer Science content unless that IS the uploaded factfile topic.
-` : `NO FACTFILES: Use the Title, Description, and Teacher Instructions above as your curriculum brief.
-Generate high-quality, topic-specific questions aligned to the subject specified — do NOT default to generic Digital Technology content.
+CRITICAL MANDATE:
+1. Every category title and every clue MUST be drawn directly from the factfile content above.
+2. Do NOT use generic Computer Science / Digital Technology categories unless the uploaded factfile is specifically about computers!
+` : `NO FACTFILES ATTACHED (MANUAL TOPIC CREATION):
+Use the Title "${titlePrompt}", Subject "${detectedSubject}", and Teacher Instructions above as your syllabus brief.
+Generate high-quality, topic-specific questions strictly aligned to "${titlePrompt}". Do NOT default to Digital Technology!
 `}
 
 ROUND ${roundNum} RULES:
@@ -194,7 +203,7 @@ ROUND ${roundNum} RULES:
 - Create exactly 4 categories, each with exactly 5 questions
 - Point values: ${pointRows[roundIndex]}
 - Categories must be distinct thematic groupings from the factfile/topic
-- Do NOT use generic "Data & Storage", "Hardware & CPU", "Networks" etc. unless the topic IS Digital Technology
+- Keep clues concise (max 15 words) and answers in Jeopardy format ("What is ...?", "Cad é ...?")
 
 REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
 {
@@ -208,7 +217,7 @@ REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
       "questions": [
         {
           "points": ${roundNum === 1 ? 100 : roundNum === 2 ? 200 : 300},
-          "clue_en": "English clue (max 20 words)",
+          "clue_en": "English clue statement",
           "clue_ga": "Ráiteas leide i nGaeilge",
           "answer_en": "What is ...?",
           "answer_ga": "Cad é ...?",
@@ -273,8 +282,8 @@ REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
   };
 
   // ── Attempt a single round with model fallback + retries ─────────────────
-  const PRIMARY_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-8b'];
-  const PER_CALL_TIMEOUT_MS = 45000; // 45s per round call; Vercel function allows 60s total
+  const PRIMARY_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro'];
+  const PER_CALL_TIMEOUT_MS = 24000; // 24s per round call (runs concurrently so total time is ~12-20s)
   const MAX_RETRIES = 1;
 
   const generateOneRound = async (roundIndex: number): Promise<ReturnType<typeof normalizeRound>> => {
@@ -290,7 +299,7 @@ REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
           const model = genAI.getGenerativeModel({
             model: modelName,
             generationConfig: {
-              temperature: 0.3,
+              temperature: 0.25,
               responseMimeType: 'application/json',
               maxOutputTokens: 4096,
             },
@@ -299,7 +308,7 @@ REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
           const result = await Promise.race([
             model.generateContent(prompt),
             new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('Round timed out after 45s')), PER_CALL_TIMEOUT_MS)
+              setTimeout(() => reject(new Error('Round timed out after 24s')), PER_CALL_TIMEOUT_MS)
             ),
           ]);
 
@@ -324,7 +333,7 @@ REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
             break; // Try next model
           }
           if (isRetryableGeminiError(msg) && attempt < MAX_RETRIES) {
-            const backoffMs = 1500 + Math.random() * 1000;
+            const backoffMs = 1200 + Math.random() * 800;
             await sleep(backoffMs);
             continue;
           }
@@ -335,13 +344,12 @@ REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
     throw lastErr || new Error(`All models failed for round ${roundIndex + 1}`);
   };
 
-  // ── Main generation: one round at a time ─────────────────────────────────
+  // ── Main generation: parallel round requests (each call is focused on 1 round) ──
   try {
-    const rounds = [];
-    for (let i = 0; i < roundsCount; i++) {
-      const round = await generateOneRound(i);
-      rounds.push(round);
-    }
+    options.onProgress?.(`Generating ${roundsCount} rounds in parallel with Gemini...`);
+    const rounds = await Promise.all(
+      Array.from({ length: roundsCount }, (_, i) => generateOneRound(i))
+    );
 
     const finalTitle = userTitle || titlePrompt;
     const finalDescription = userDescription || 'Bilingual game generated from Irish & English curriculum content';
@@ -380,6 +388,97 @@ REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
   }
 }
 
+// Extract structured categories & questions dynamically from raw factfile text
+function extractFactfileRounds(
+  englishText: string,
+  irishText: string,
+  roundsCount: number,
+  fallbackSubject: string
+): Round[] {
+  const combinedText = `${englishText}\n\n${irishText}`.trim();
+  // Split into raw candidate paragraphs / sections
+  const rawBlocks = combinedText
+    .split(/(?:\r?\n\s*\r?\n|[0-9]+\.\s+|[A-Z]\.\s+|Section\s+[0-9]+[:.]?\s*)/i)
+    .map((b) => b.trim())
+    .filter((b) => b.length > 25);
+
+  const pointsByRound = [
+    [100, 200, 300, 400, 500],
+    [200, 400, 600, 800, 1000],
+    [300, 600, 900, 1200, 1500],
+  ];
+
+  const roundNamesEn = ['Jeopardy Round', 'Double Jeopardy Round', 'Final Jeopardy Round'];
+  const roundNamesGa = ['Babhta 1: Jeopardy', 'Babhta 2: Jeopardy Dúbailte', 'Babhta 3: Jeopardy Deiridh'];
+
+  const rounds: Round[] = [];
+
+  for (let rIdx = 0; rIdx < roundsCount; rIdx++) {
+    const roundNum = rIdx + 1;
+    const pts = pointsByRound[rIdx] || pointsByRound[0];
+    const categories: Category[] = [];
+
+    for (let cIdx = 0; cIdx < 4; cIdx++) {
+      const blockIdx = rIdx * 4 + cIdx;
+      const block = rawBlocks[blockIdx % (rawBlocks.length || 1)] || '';
+
+      // Derive category title from first line or phrase (max 50 chars)
+      const firstLine = block.split(/[\r\n.:]/)[0]?.trim() || '';
+      const catNameEn = (firstLine.length > 3 && firstLine.length < 50
+        ? firstLine
+        : `${fallbackSubject}: Topic ${cIdx + 1}`
+      ).slice(0, 255);
+      const catNameGa = `${catNameEn} (Gaeilge)`;
+
+      // Split block into sentences for clues
+      const sentences = block
+        .split(/(?<=[.?!])\s+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 15);
+
+      const questions: Question[] = [];
+      for (let qIdx = 0; qIdx < 5; qIdx++) {
+        const sentence = sentences[qIdx % (sentences.length || 1)] || `Key curriculum concept relating to ${catNameEn}.`;
+        const clueEn = sentence.slice(0, 300);
+        const clueGa = `Coincheap curaclaim a bhaineann le ${catNameEn}: ${clueEn}`.slice(0, 300);
+
+        // Derive answer from key words
+        const words = sentence.split(/\s+/).filter((w) => w.length > 4);
+        const keyWord = words[0] || catNameEn;
+
+        questions.push({
+          id: `q-${roundNum}-${cIdx + 1}-${qIdx + 1}`,
+          points: pts[qIdx],
+          clue_en: clueEn,
+          clue_ga: clueGa,
+          answer_en: `What is ${keyWord}?`,
+          answer_ga: `Cad é ${keyWord}?`,
+          explanation_en: `Curriculum factfile content for ${catNameEn}.`,
+          explanation_ga: `Ábhar bileog fíricí don chatagóir ${catNameEn}.`,
+          isDailyDouble: qIdx === 3 && cIdx === 2,
+        });
+      }
+
+      categories.push({
+        id: `cat-${roundNum}-${cIdx + 1}`,
+        name_en: catNameEn,
+        name_ga: catNameGa,
+        questions,
+      });
+    }
+
+    rounds.push({
+      id: `round-${roundNum}`,
+      roundNumber: roundNum,
+      name_en: roundNamesEn[rIdx],
+      name_ga: roundNamesGa[rIdx],
+      categories,
+    });
+  }
+
+  return rounds;
+}
+
 // Fallback generator when offline or no API key is specified yet
 function generateSmartTemplateGame(
   title: string,
@@ -391,189 +490,222 @@ function generateSmartTemplateGame(
   englishExcerpt: string,
   sourceFiles: SourceFile[] = []
 ): JeopardyGame {
-  const hasContent = irishExcerpt.length > 20 || englishExcerpt.length > 20;
-  const sampleSubtitle = hasContent ? '(Curriculum Factfile Engine)' : '';
+  const hasContent = irishExcerpt.length > 25 || englishExcerpt.length > 25;
   const clampedRounds = Math.min(Math.max(roundsCount, 1), 3);
+  const detectedSubject = subject || inferSubject(title, customInstructions, `${irishExcerpt} ${englishExcerpt}`);
 
-  // All template content — 3 rounds × 4 categories × 5 questions each
-  const roundTemplates: Round[] = [
-    {
-      id: 'round-1',
-      roundNumber: 1,
-      name_en: 'Jeopardy Round',
-      name_ga: 'Babhta 1: Jeopardy',
-      categories: [
-        {
-          id: 'c-1-1',
-          name_en: 'Data & Storage',
-          name_ga: 'Sonraí & Stóráil',
-          questions: [
-            { id: 'q-1-1-1', points: 100, clue_en: 'The smallest unit of data in computing, holding only 0 or 1.', clue_ga: 'An t-aonad sonraí is lú sa ríomhaireacht, ní féidir leis ach 0 nó 1 a choinneáil.', answer_en: 'What is a bit?', answer_ga: 'Cad é giotán?', explanation_en: 'Short for binary digit.', explanation_ga: 'Giorrúchán ar dhigit dhénártha.' },
-            { id: 'q-1-1-2', points: 200, clue_en: 'A collection of eight individual bits.', clue_ga: 'Bailiúchán d\'ocht ngiotán aonair.', answer_en: 'What is a byte?', answer_ga: 'Cad é beart?', explanation_en: 'Standard byte size across computing.', explanation_ga: 'Gnáthmhéid beart sa ríomhaireacht.' },
-            { id: 'q-1-1-3', points: 300, clue_en: 'High-speed temporary volatile computer memory.', clue_ga: 'Cuimhne ríomhaire shealadach ardluais atá luaineach.', answer_en: 'What is RAM?', answer_ga: 'Cad é RAM?', explanation_en: 'Loses data when powered off.', explanation_ga: 'Cailleann sé sonraí nuair a mhúchtar é.' },
-            { id: 'q-1-1-4', points: 400, clue_en: 'Storage technology with no moving parts using flash chips.', clue_ga: 'Teicneolaíocht stórála gan pháirteanna gluaisteacha.', answer_en: 'What is an SSD?', answer_ga: 'Cad é SSD?', explanation_en: 'Solid State Drive.', explanation_ga: 'Tiomántán Soladstaide.' },
-            { id: 'q-1-1-5', points: 500, clue_en: 'One billion bytes, or 1,024 megabytes.', clue_ga: 'Billiún beart, nó 1,024 meigibheart.', answer_en: 'What is a Gigabyte?', answer_ga: 'Cad é Gigibheart?', explanation_en: 'Common storage unit.', explanation_ga: 'Aonad coitianta stórála.' },
-          ],
-        },
-        {
-          id: 'c-1-2',
-          name_en: 'Hardware & CPU',
-          name_ga: 'Crua-earraí & LAP',
-          questions: [
-            { id: 'q-1-2-1', points: 100, clue_en: 'The main processor chip, often called the computer\'s brain.', clue_ga: 'An phríomhshlis próiseálaí, ar a dtugtar inchinn an ríomhaire.', answer_en: 'What is the CPU?', answer_ga: 'Cad é an LAP?', explanation_en: 'Central Processing Unit.', explanation_ga: 'Lár-Aonad Próiseála.' },
-            { id: 'q-1-2-2', points: 200, clue_en: 'The repetitive CPU cycle: Fetch, Decode, and this third step.', clue_ga: 'Timthriall an LAP: Faigh, Díchódaigh, agus an tríú céim seo.', answer_en: 'What is Execute?', answer_ga: 'Cad é Rith?', explanation_en: 'The CPU instruction cycle.', explanation_ga: 'Timthriall treoracha an LAP.' },
-            { id: 'q-1-2-3', points: 300, clue_en: 'CPU sub-unit that performs arithmetic and logic operations.', clue_ga: 'Fo-aonad den LAP a dhéanann oibríochtaí uimhríochta agus loighce.', answer_en: 'What is the ALU?', answer_ga: 'Cad é an AUL?', explanation_en: 'Arithmetic Logic Unit.', explanation_ga: 'Aonad Uimhríochta agus Loighce.' },
-            { id: 'q-1-2-4', points: 400, clue_en: 'Ultra-fast miniature memory cells built into the processor.', clue_ga: 'Cealla cuimhne beaga bídeacha sár-luatha sa phróiseálaí.', answer_en: 'What are Registers?', answer_ga: 'Cad iad Cláir?', explanation_en: 'Hold immediate data inside the CPU.', explanation_ga: 'Coinníonn siad sonraí láithreacha sa LAP.' },
-            { id: 'q-1-2-5', points: 500, clue_en: 'Main circuit board connecting all hardware components.', clue_ga: 'Príomhchlár ciorcaid a cheanglaíonn na comhpháirteanna crua-earraí.', answer_en: 'What is the Motherboard?', answer_ga: 'Cad é an Máthairchlár?', explanation_en: 'Houses CPU, RAM, and expansion slots.', explanation_ga: 'Coimeádann sé LAP, RAM agus sliotáin leathnaithe.' },
-          ],
-        },
-        {
-          id: 'c-1-3',
-          name_en: 'Networks',
-          name_ga: 'Líonraí',
-          questions: [
-            { id: 'q-1-3-1', points: 100, clue_en: 'A network confined to a single building or campus.', clue_ga: 'Líonra atá teoranta d\'fhoirgneamh amháin nó campas.', answer_en: 'What is a LAN?', answer_ga: 'Cad é LAN?', explanation_en: 'Local Area Network.', explanation_ga: 'Líonra Ceantair Áitiúil.' },
-            { id: 'q-1-3-2', points: 200, clue_en: 'A worldwide system of interconnected computer networks.', clue_ga: 'Córas domhanda de líonraí ríomhaireachta idirnasctha.', answer_en: 'What is the Internet?', answer_ga: 'Cad é an tIdirlíon?', explanation_en: 'Global network of networks.', explanation_ga: 'Líonra domhanda na líonraí.' },
-            { id: 'q-1-3-3', points: 300, clue_en: 'Device that forwards data packets between IP networks.', clue_ga: 'Gléas a chuireann paicéid sonraí ar aghaidh idir líonraí IP.', answer_en: 'What is a Router?', answer_ga: 'Cad é Ródaire?', explanation_en: 'Operates at the network layer.', explanation_ga: 'Oibríonn sé ag ciseal an líonra.' },
-            { id: 'q-1-3-4', points: 400, clue_en: 'System that converts domain names to IP addresses.', clue_ga: 'Córas a aistríonn ainmneacha fearainn go seoltaí IP.', answer_en: 'What is DNS?', answer_ga: 'Cad é DNS?', explanation_en: 'Domain Name System.', explanation_ga: 'Córas Ainmneacha Fearainn.' },
-            { id: 'q-1-3-5', points: 500, clue_en: 'Protocol for secure encrypted web browsing.', clue_ga: 'Prótacal do bhrabhsáil gréasáin slán criptithe.', answer_en: 'What is HTTPS?', answer_ga: 'Cad é HTTPS?', explanation_en: 'HTTP Secure.', explanation_ga: 'HTTP Slán.' },
-          ],
-        },
-        {
-          id: 'c-1-4',
-          name_en: 'Cybersecurity',
-          name_ga: 'Cibearshlándáil',
-          questions: [
-            { id: 'q-1-4-1', points: 100, clue_en: 'Deceptive emails tricking users into revealing credentials.', clue_ga: 'Ríomhphoist mhealltacha a dhéanann iarracht faisnéis a bhaint amach.', answer_en: 'What is Phishing?', answer_ga: 'Cad é Bradphadaireacht?', explanation_en: 'Common social engineering attack.', explanation_ga: 'Ionsaí coitianta innealtóireachta sóisialta.' },
-            { id: 'q-1-4-2', points: 200, clue_en: 'Barrier that filters network traffic by security rules.', clue_ga: 'Bac a scagann trácht líonra bunaithe ar rialacha slándála.', answer_en: 'What is a Firewall?', answer_ga: 'Cad é Balla Dóiteáin?', explanation_en: 'Monitors incoming and outgoing traffic.', explanation_ga: 'Déanann sé monatóireacht ar thrácht líonra.' },
-            { id: 'q-1-4-3', points: 300, clue_en: 'Malware that encrypts files and demands a ransom payment.', clue_ga: 'Mail-earraí a chriptíonn comhaid agus a éilíonn éiric.', answer_en: 'What is Ransomware?', answer_ga: 'Cad é Éiric-Earraí?', explanation_en: 'Locks files until ransom is paid.', explanation_ga: 'Glasálann sé comhaid go dtí go n-íoctar éiric.' },
-            { id: 'q-1-4-4', points: 400, clue_en: 'Authentication using two or more verification methods.', clue_ga: 'Fíordheimhniú ag úsáid dhá mhodh fíoraithe nó níos mó.', answer_en: 'What is MFA / 2FA?', answer_ga: 'Cad é Fíordheimhniú Ilfhachtóra?', explanation_en: 'Significantly improves account security.', explanation_ga: 'Feabhsaíonn sé slándáil cuntais go mór.' },
-            { id: 'q-1-4-5', points: 500, clue_en: 'EU legal framework protecting personal data and privacy rights.', clue_ga: 'Creat dlíthiúil AE a chosnaíonn sonraí pearsanta agus ceart príobháideachta.', answer_en: 'What is GDPR?', answer_ga: 'Cad é RGCS (GDPR)?', explanation_en: 'General Data Protection Regulation.', explanation_ga: 'Rialachán Ginearálta maidir le Cosaint Sonraí.' },
-          ],
-        },
-      ],
-    },
-    {
-      id: 'round-2',
-      roundNumber: 2,
-      name_en: 'Double Jeopardy Round',
-      name_ga: 'Babhta 2: Jeopardy Dúbailte',
-      categories: [
-        {
-          id: 'c-2-1',
-          name_en: 'Binary & Number Systems',
-          name_ga: 'Córais Uimhreacha & Dénártha',
-          questions: [
-            { id: 'q-2-1-1', points: 200, clue_en: 'The number base used by all digital computers internally.', clue_ga: 'Bonn an uimhreach a úsáideann ríomhairí digiteacha go hinmheánach.', answer_en: 'What is binary (base 2)?', answer_ga: 'Cad é an córas dénártha (bun 2)?', explanation_en: 'Uses only 0 and 1.', explanation_ga: 'Úsáideann sé 0 agus 1 amháin.' },
-            { id: 'q-2-1-2', points: 400, clue_en: 'The denary value of the binary number 00001010.', clue_ga: 'Luach deachúil na huimhreach dénártha 00001010.', answer_en: 'What is 10?', answer_ga: 'Cad é 10?', explanation_en: '8+2=10 in denary.', explanation_ga: '8+2=10 sa chóras deachúil.' },
-            { id: 'q-2-1-3', points: 600, clue_en: 'The number of distinct values representable with 3 bits.', clue_ga: 'Líon na luachanna ar leith is féidir a léiriú le 3 ghiotán.', answer_en: 'What is 8 (2³)?', answer_ga: 'Cad é 8 (2³)?', explanation_en: '2 to the power of 3.', explanation_ga: '2 faoi chumhacht 3.' },
-            { id: 'q-2-1-4', points: 800, clue_en: 'Number system using base 16, digits 0–9 and A–F.', clue_ga: 'Córas uimhreach ag úsáid bun 16, digití 0-9 agus A-F.', answer_en: 'What is Hexadecimal?', answer_ga: 'Cad é Heicsidheachúil?', explanation_en: 'Used in memory addresses and colour codes.', explanation_ga: 'Úsáidtear é i seoltaí cuimhne agus cóid dathanna.' },
-            { id: 'q-2-1-5', points: 1000, clue_en: 'Binary operation outputting 1 only when both inputs are 1.', clue_ga: 'Oibríocht dhénártha a thugann 1 amach nuair atá an dá ionchur ina 1.', answer_en: 'What is an AND gate?', answer_ga: 'Cad é Geata AGUS?', explanation_en: 'Fundamental digital logic gate.', explanation_ga: 'Geata loighce digiteach bunúsach.' },
-          ],
-        },
-        {
-          id: 'c-2-2',
-          name_en: 'Software & Operating Systems',
-          name_ga: 'Bogearraí & Córais Oibriúcháin',
-          questions: [
-            { id: 'q-2-2-1', points: 200, clue_en: 'Software that manages computer hardware and software resources.', clue_ga: 'Bogearraí a bhainistíonn acmhainní crua-earraí agus bogearraí.', answer_en: 'What is an Operating System?', answer_ga: 'Cad é Córas Oibriúcháin?', explanation_en: 'e.g. Windows, macOS, Linux.', explanation_ga: 'm.sh. Windows, macOS, Linux.' },
-            { id: 'q-2-2-2', points: 400, clue_en: 'Programs running in RAM that temporarily need processor time.', clue_ga: 'Cláir ag rith i RAM a bhfuil am próiseálaí uathu go sealadach.', answer_en: 'What are Processes?', answer_ga: 'Cad iad Próisis?', explanation_en: 'OS manages process scheduling.', explanation_ga: 'Bainistíonn an Córas Oibriúcháin sceidealú próisis.' },
-            { id: 'q-2-2-3', points: 600, clue_en: 'OS technique running multiple tasks by rapidly switching between them.', clue_ga: 'Teicníc OS a ritheann ilchúraimí trí athrú tapa eatarthu.', answer_en: 'What is Multitasking?', answer_ga: 'Cad é Ilchúraimíocht?', explanation_en: 'Gives illusion of parallel execution.', explanation_ga: 'Tugann sé an léiriú go bhfuil rith comhthreomhar ann.' },
-            { id: 'q-2-2-4', points: 800, clue_en: 'Stored machine code instructions directly executed by the CPU.', clue_ga: 'Treoracha cód meaisín stóráilte a fheidhmíonn an LAP go díreach.', answer_en: 'What is a Program / Executable?', answer_ga: 'Cad é Clár / Comhad Inrite?', explanation_en: 'Compiled source code.', explanation_ga: 'Cód foinse tiomsaithe.' },
-            { id: 'q-2-2-5', points: 1000, clue_en: 'OS component deciding which process gets CPU time next.', clue_ga: 'Comhpháirt OS a chinnteann cén próiseas a gheobhaidh am LAP ansin.', answer_en: 'What is the Scheduler?', answer_ga: 'Cad é an Sceidealóir?', explanation_en: 'Manages CPU time allocation.', explanation_ga: 'Bainistíonn sé leithdháileadh ama LAP.' },
-          ],
-        },
-        {
-          id: 'c-2-3',
-          name_en: 'The Internet & Web',
-          name_ga: 'An tIdirlíon & an Gréasán',
-          questions: [
-            { id: 'q-2-3-1', points: 200, clue_en: 'Unique numerical address identifying each device on a network.', clue_ga: 'Seoladh uimhriúil uathúil a aithníonn gach gléas ar líonra.', answer_en: 'What is an IP Address?', answer_ga: 'Cad é Seoladh IP?', explanation_en: 'e.g. 192.168.1.1', explanation_ga: 'm.sh. 192.168.1.1' },
-            { id: 'q-2-3-2', points: 400, clue_en: 'Protocol used to send email messages across the internet.', clue_ga: 'Prótacal a úsáidtear chun teachtaireachtaí ríomhphoist a sheoladh.', answer_en: 'What is SMTP?', answer_ga: 'Cad é SMTP?', explanation_en: 'Simple Mail Transfer Protocol.', explanation_ga: 'Prótacal Aistrithe Ríomhphoist Simplí.' },
-            { id: 'q-2-3-3', points: 600, clue_en: 'Software that requests and displays web pages for users.', clue_ga: 'Bogearraí a iarrann agus a thaispeánann leathanaigh ghréasáin.', answer_en: 'What is a Web Browser?', answer_ga: 'Cad é Brabhsálaí Gréasáin?', explanation_en: 'e.g. Chrome, Firefox, Safari.', explanation_ga: 'm.sh. Chrome, Firefox, Safari.' },
-            { id: 'q-2-3-4', points: 800, clue_en: 'Server storing and serving website files to browsers worldwide.', clue_ga: 'Freastalaí a stórálann agus a sheirbheálann comhaid suíomh gréasáin.', answer_en: 'What is a Web Server?', answer_ga: 'Cad é Freastalaí Gréasáin?', explanation_en: 'e.g. Apache, Nginx.', explanation_ga: 'm.sh. Apache, Nginx.' },
-            { id: 'q-2-3-5', points: 1000, clue_en: 'Set of rules governing how data is transmitted across networks.', clue_ga: 'Sraith rialacha a rialaíonn conas sonraí a tharchur ar líonraí.', answer_en: 'What is a Protocol?', answer_ga: 'Cad é Prótacal?', explanation_en: 'e.g. TCP/IP, HTTP, FTP.', explanation_ga: 'm.sh. TCP/IP, HTTP, FTP.' },
-          ],
-        },
-        {
-          id: 'c-2-4',
-          name_en: 'Input & Output Devices',
-          name_ga: 'Gléasanna Ionchuir & Aschuir',
-          questions: [
-            { id: 'q-2-4-1', points: 200, clue_en: 'Hardware device that captures and digitises physical documents.', clue_ga: 'Gléas crua-earraí a ghabhann agus a dhigitíonn doiciméid fhisiciúla.', answer_en: 'What is a Scanner?', answer_ga: 'Cad é Scanóir?', explanation_en: 'Converts paper to digital images.', explanation_ga: 'Tiontaíonn sé páipéar go híomhánna digiteacha.' },
-            { id: 'q-2-4-2', points: 400, clue_en: 'Output device rendering visual information as printed physical copies.', clue_ga: 'Gléas aschuir a léiríonn faisnéis amhairc mar chóipeanna fisiciúla.', answer_en: 'What is a Printer?', answer_ga: 'Cad é Clóire?', explanation_en: 'Produces hard-copy output.', explanation_ga: 'Táirgeann sé aschur cruachóipe.' },
-            { id: 'q-2-4-3', points: 600, clue_en: 'Touch-sensitive display combining input and output in one surface.', clue_ga: 'Taispeáint íogair don teagmháil a chomhcheanglaíonn ionchur agus aschur.', answer_en: 'What is a Touchscreen?', answer_ga: 'Cad é Scáileán Teagmhála?', explanation_en: 'Used in phones, tablets, kiosks.', explanation_ga: 'Úsáidtear é i ngutháin, táibléid agus ciosca.' },
-            { id: 'q-2-4-4', points: 800, clue_en: 'Peripheral translating physical movement into on-screen cursor control.', clue_ga: 'Forimeallaigh a aistríonn gluaiseacht fhisiciúil go rialú cúrsóra.', answer_en: 'What is a Mouse?', answer_ga: 'Cad é Luch (Mouse)?', explanation_en: 'Pointing input device.', explanation_ga: 'Gléas ionchuir pointeála.' },
-            { id: 'q-2-4-5', points: 1000, clue_en: 'Sensor array in smartphones measuring device orientation and motion.', clue_ga: 'Sraith braiteoir i bhfóin chliste a thomhaiseann treoshuíomh agus gluaiseacht.', answer_en: 'What is an Accelerometer / Gyroscope?', answer_ga: 'Cad é Luasmhéadar / Gireascóp?', explanation_en: 'Enables screen rotation and motion sensing.', explanation_ga: 'Cumasaíonn sé rothlú scáileáin agus braite gluaiseachta.' },
-          ],
-        },
-      ],
-    },
-    {
-      id: 'round-3',
-      roundNumber: 3,
-      name_en: 'Final Jeopardy Round',
-      name_ga: 'Babhta 3: Jeopardy Deiridh',
-      categories: [
-        {
-          id: 'c-3-1',
-          name_en: 'Programming & Algorithms',
-          name_ga: 'Ríomhchlárú & Algartaim',
-          questions: [
-            { id: 'q-3-1-1', points: 300, clue_en: 'Step-by-step finite set of instructions to solve a problem.', clue_ga: 'Sraith teoranta treoracha céim ar chéim chun fadhb a réiteach.', answer_en: 'What is an Algorithm?', answer_ga: 'Cad é Algartam?', explanation_en: 'Foundation of all programming.', explanation_ga: 'Bonn gach ríomhchlárúcháin.' },
-            { id: 'q-3-1-2', points: 600, clue_en: 'Human-readable code translated into machine code by a compiler.', clue_ga: 'Cód inléite ag daoine a aistríonn tiomsaitheoir go cód meaisín.', answer_en: 'What is Source Code?', answer_ga: 'Cad é Cód Foinse?', explanation_en: 'Written in high-level languages.', explanation_ga: 'Scríofar é i dteangacha ardleibhéil.' },
-            { id: 'q-3-1-3', points: 900, clue_en: 'Error in a program causing incorrect or unexpected behaviour.', clue_ga: 'Earráid i gclár a chúisíonn iompar mícheart nó neamhionchais.', answer_en: 'What is a Bug?', answer_ga: 'Cad é Fabht (Bug)?', explanation_en: 'Debugging finds and fixes bugs.', explanation_ga: 'Faigheann agus deisíonn dífhabhtú fabhtanna.' },
-            { id: 'q-3-1-4', points: 1200, clue_en: 'Repeating block of code that runs until a condition is met.', clue_ga: 'Bloc cóid athfhillteach a ritheann go dtí go gcomhlíontar coinníoll.', answer_en: 'What is a Loop?', answer_ga: 'Cad é Lúb?', explanation_en: 'e.g. for loop, while loop.', explanation_ga: 'm.sh. lúb for, lúb while.' },
-            { id: 'q-3-1-5', points: 1500, clue_en: 'OOP concept where a class inherits attributes from a parent class.', clue_ga: 'Coincheap OOP ina n-oirdheiscíonn rang tréithe ó rang tuismitheora.', answer_en: 'What is Inheritance?', answer_ga: 'Cad é Oidhreacht?', explanation_en: 'Core principle of object-oriented programming.', explanation_ga: 'Prionsabal croí ríomhchlárúcháin réad-dhírithe.' },
-          ],
-        },
-        {
-          id: 'c-3-2',
-          name_en: 'Data Representation',
-          name_ga: 'Léiriú Sonraí',
-          questions: [
-            { id: 'q-3-2-1', points: 300, clue_en: 'File format storing images as a grid of individually coloured pixels.', clue_ga: 'Formáid comhaid a stórálann íomhánna mar eangach de phicsilí daite.', answer_en: 'What is a Bitmap / Raster image?', answer_ga: 'Cad é íomhá Bitmap / Raster?', explanation_en: 'e.g. PNG, JPEG, BMP.', explanation_ga: 'm.sh. PNG, JPEG, BMP.' },
-            { id: 'q-3-2-2', points: 600, clue_en: 'Standard encoding mapping text characters to numerical values.', clue_ga: 'Ionchódú caighdeánach a mhapálann carachtair téacs go luachanna uimhriúla.', answer_en: 'What is ASCII or Unicode?', answer_ga: 'Cad é ASCII nó Unicode?', explanation_en: 'Allows computers to store text.', explanation_ga: 'Ligeann do ríomhairí téacs a stóráil.' },
-            { id: 'q-3-2-3', points: 900, clue_en: 'Reducing file size without permanently losing any data.', clue_ga: 'Méid comhaid a laghdú gan aon sonraí a chailleadh go buan.', answer_en: 'What is Lossless Compression?', answer_ga: 'Cad é Comhbhrú gan Chaillteanas?', explanation_en: 'e.g. ZIP, PNG, FLAC.', explanation_ga: 'm.sh. ZIP, PNG, FLAC.' },
-            { id: 'q-3-2-4', points: 1200, clue_en: 'Number of pixels per inch determining image print sharpness.', clue_ga: 'Líon na bpicsilí in aghaidh an orlach a chinnteann géire priontála íomhá.', answer_en: 'What is DPI / Resolution?', answer_ga: 'Cad é DPI / Taifeach?', explanation_en: 'Higher DPI = sharper print.', explanation_ga: 'DPI níos airde = priont géire.' },
-            { id: 'q-3-2-5', points: 1500, clue_en: 'Sampling rate determining the quality of digital audio recordings.', clue_ga: 'Ráta samplála a chinnteann cáilíocht taifeadtaí fuaime digití.', answer_en: 'What is Sample Rate / Bit Depth?', answer_ga: 'Cad é Ráta Samplála / Doimhneacht Ghiotán?', explanation_en: 'e.g. 44.1kHz CD quality.', explanation_ga: 'm.sh. cáilíocht CD 44.1kHz.' },
-          ],
-        },
-        {
-          id: 'c-3-3',
-          name_en: 'Artificial Intelligence',
-          name_ga: 'Intleacht Shaorga',
-          questions: [
-            { id: 'q-3-3-1', points: 300, clue_en: 'AI subset where computers learn from data without explicit programming.', clue_ga: 'Fo-thacar AI ina bhfoghlaimíonn ríomhairí ó shonraí gan ríomhchlárú sainráite.', answer_en: 'What is Machine Learning?', answer_ga: 'Cad é Meaisínfhoghlaim?', explanation_en: 'Powers recommendation systems and image recognition.', explanation_ga: 'Cumhachtaíonn sé córais molta agus aitheantas íomhá.' },
-            { id: 'q-3-3-2', points: 600, clue_en: 'AI technique using layered neural networks to process complex data.', clue_ga: 'Teicníc AI ag úsáid líonraí néaracha srathacha chun sonraí casta a phróiseáil.', answer_en: 'What is Deep Learning?', answer_ga: 'Cad é Domhanfhoghlaim?', explanation_en: 'Powers speech and vision AI.', explanation_ga: 'Cumhachtaíonn sé AI cainte agus radhairc.' },
-            { id: 'q-3-3-3', points: 900, clue_en: 'Dataset used to teach a machine learning model patterns.', clue_ga: 'Tacar sonraí a úsáidtear chun patrúin a mhúineadh do shamhail mheaisínfhoghlama.', answer_en: 'What is Training Data?', answer_ga: 'Cad é Sonraí Oiliúna?', explanation_en: 'Quality of training data determines model accuracy.', explanation_ga: 'Cinneann cáilíocht sonraí oiliúna cruinneas samhla.' },
-            { id: 'q-3-3-4', points: 1200, clue_en: 'AI ethical concern about unfair outcomes caused by biased training data.', clue_ga: 'Imní eiticiúil AI faoi thorthaí éagóracha ó shonraí oiliúna claonta.', answer_en: 'What is AI Bias?', answer_ga: 'Cad é Claontacht AI?', explanation_en: 'Bias in = bias out.', explanation_ga: 'Claontacht isteach = claontacht amach.' },
-            { id: 'q-3-3-5', points: 1500, clue_en: 'Turing test assessing whether machine responses are indistinguishable from humans.', clue_ga: 'Tástáil Turing a mheasann an bhfuil freagraí meaisín indistinguishable ó dhaoine.', answer_en: 'What is the Turing Test?', answer_ga: 'Cad é Tástáil Turing?', explanation_en: 'Proposed by Alan Turing in 1950.', explanation_ga: 'Molta ag Alan Turing sa bhliain 1950.' },
-          ],
-        },
-        {
-          id: 'c-3-4',
-          name_en: 'Digital Ethics & Society',
-          name_ga: 'Eitice Dhigiteach & An tSochaí',
-          questions: [
-            { id: 'q-3-4-1', points: 300, clue_en: 'Legal right protecting original creative works from copying.', clue_ga: 'Ceart dlíthiúil a chosnaíonn saothair chruthaitheacha bunaidh ó chóipeáil.', answer_en: 'What is Copyright?', answer_ga: 'Cad é Cóipcheart?', explanation_en: 'Automatic protection for original works.', explanation_ga: 'Cosaint uathoibríoch do shaothair bhunaidh.' },
-            { id: 'q-3-4-2', points: 600, clue_en: 'The unequal access to digital technology and internet across society.', clue_ga: 'Rochtain éagothrom ar theicneolaíocht dhigiteach agus idirlíon sa tsochaí.', answer_en: 'What is the Digital Divide?', answer_ga: 'Cad é an Scoilt Dhigiteach?', explanation_en: 'A major equality concern globally.', explanation_ga: 'Imní mhór comhionannais ar fud an domhain.' },
-            { id: 'q-3-4-3', points: 900, clue_en: 'Principle that all internet traffic should be treated equally.', clue_ga: 'Prionsabal gur chóir gach trácht idirlín a chóireáil go cothrom.', answer_en: 'What is Net Neutrality?', answer_ga: 'Cad é Neodracht Líonra?', explanation_en: 'Prevents ISPs from throttling specific services.', explanation_ga: 'Coiscíonn sé Soláthraithe Seirbhíse Idirlín ó sheirbhísí sonracha a mhoilliú.' },
-            { id: 'q-3-4-4', points: 1200, clue_en: 'Practice of deliberately spreading false information online.', clue_ga: 'Cleachtas faisnéis bhréagach a scaipeadh d\'aon ghnó ar líne.', answer_en: 'What is Disinformation / Fake News?', answer_ga: 'Cad é Mífhaisnéis / Nuacht Bhréagach?', explanation_en: 'A major digital literacy challenge.', explanation_ga: 'Dúshlán mór litearthachta digití.' },
-            { id: 'q-3-4-5', points: 1500, clue_en: 'Designing technology so it is usable by people of all abilities.', clue_ga: 'Teicneolaíocht a dhearadh ionas gur féidir le daoine de gach cumas í a úsáid.', answer_en: 'What is Digital Accessibility?', answer_ga: 'Cad é Inrochtaineacht Dhigiteach?', explanation_en: 'e.g. screen readers, captions, high contrast.', explanation_ga: 'm.sh. léitheoirí scáileáin, fotheideal, ardcodarsnacht.' },
-          ],
-        },
-      ],
-    },
-  ];
+  // If teacher provided factfile text, extract categories directly from that text!
+  if (hasContent) {
+    const extractedRounds = extractFactfileRounds(englishExcerpt, irishExcerpt, clampedRounds, detectedSubject);
+    return {
+      id: 'game-curriculum-' + Date.now(),
+      title: title || `${detectedSubject} (Curriculum Factfile)`,
+      subject: detectedSubject,
+      description: description || 'Bilingual Jeopardy game generated from teacher factfile content',
+      sourceFiles: sourceFiles,
+      fallbackUsed: true,
+      generationSource: 'curriculum-engine',
+      rounds: extractedRounds,
+    };
+  }
 
-  const gameTitle = title ? (sampleSubtitle ? `${title} ${sampleSubtitle}` : title) : `Digital Technology ${sampleSubtitle}`.trim();
-  const gameDesc = description || (hasContent ? 'Bilingual game generated from Irish & English curriculum factfiles' : 'Bilingual Jeopardy game ready for classroom interactive display.');
+  // Multi-subject curriculum templates when no factfile text is attached:
+  const isScience = detectedSubject.includes('Science') || detectedSubject.includes('Eolaíocht') || detectedSubject.includes('Biology') || detectedSubject.includes('Bitheolaíocht');
+  const isHistory = detectedSubject.includes('History') || detectedSubject.includes('Stair');
+  const isGeography = detectedSubject.includes('Geography') || detectedSubject.includes('Tíreolaíocht');
+  const isBusiness = detectedSubject.includes('Business') || detectedSubject.includes('Gnó');
+  const isGaeilge = detectedSubject.includes('Gaeilge') || detectedSubject.includes('Irish');
+  const isMaths = detectedSubject.includes('Math') || detectedSubject.includes('Mata');
+
+  let roundTemplates: Round[];
+
+  if (isScience) {
+    roundTemplates = [
+      {
+        id: 'round-1',
+        roundNumber: 1,
+        name_en: 'Jeopardy Round',
+        name_ga: 'Babhta 1: Jeopardy',
+        categories: [
+          {
+            id: 'c-1-1',
+            name_en: 'Cell Biology & Organelles',
+            name_ga: 'Bitheolaíocht Cille & Orgánaigh',
+            questions: [
+              { id: 'q-1-1-1', points: 100, clue_en: 'The control center of the cell containing genetic material.', clue_ga: 'Lárionad rialaithe na cille ina bhfuil an t-ábhar géiniteach.', answer_en: 'What is the Nucleus?', answer_ga: 'Cad é an Núicléas?', explanation_en: 'Holds DNA in eukaryotic cells.', explanation_ga: 'Coinníonn sé DNA i gcealla eocarótacha.' },
+              { id: 'q-1-1-2', points: 200, clue_en: 'The powerhouse of the cell where cellular respiration produces ATP.', clue_ga: 'Teach cumhachta na cille ina dtáirgtear ATP trí riospráid cheallach.', answer_en: 'What is the Mitochondrion?', answer_ga: 'Cad é an Miteacoindre?', explanation_en: 'Produces ATP through aerobic respiration.', explanation_ga: 'Táirgeann sé ATP trí riospráid aeróbach.' },
+              { id: 'q-1-1-3', points: 300, clue_en: 'Plant organelle containing chlorophyll where photosynthesis occurs.', clue_ga: 'Orgánach planda ina bhfuil clóraifill agus ina dtarlaíonn fótaisintéis.', answer_en: 'What is the Chloroplast?', answer_ga: 'Cad é an Clóraplast?', explanation_en: 'Absorbs light energy.', explanation_ga: 'Ionsúnn sé fuinneamh solais.' },
+              { id: 'q-1-1-4', points: 400, clue_en: 'Selectively permeable barrier surrounding all living cells.', clue_ga: 'Bac roghnach tréscaoilteach a thimpeallaíonn gach cill bheo.', answer_en: 'What is the Cell Membrane?', answer_ga: 'Cad é Scannán na Cille?', explanation_en: 'Composed of phospholipid bilayer.', explanation_ga: 'Comhdhéanta de dhéchiseal fosfailipide.' },
+              { id: 'q-1-1-5', points: 500, clue_en: 'Cellular structure responsible for protein synthesis in the cytoplasm.', clue_ga: 'Struchtúr ceallach atá freagrach as sintéis próitéine sa chíteaplasma.', answer_en: 'What is the Ribosome?', answer_ga: 'Cad é an Ribeasóm?', explanation_en: 'Translates mRNA into polypeptide chains.', explanation_ga: 'Aistríonn sé mRNA go slabhraí polaipeiptíde.' },
+            ],
+          },
+          {
+            id: 'c-1-2',
+            name_en: 'Photosynthesis & Respiration',
+            name_ga: 'Fótaisintéis & Riospráid',
+            questions: [
+              { id: 'q-1-2-1', points: 100, clue_en: 'Gas absorbed by plants from the air to carry out photosynthesis.', clue_ga: 'Gás a ghlacann plandaí ón aer chun fótaisintéis a dhéanamh.', answer_en: 'What is Carbon Dioxide (CO2)?', answer_ga: 'Cad é Dé-ocsaíd Charbóin (CO2)?', explanation_en: 'Taken in through stomata.', explanation_ga: 'Tógtar isteach é trí stómaí.' },
+              { id: 'q-1-2-2', points: 200, clue_en: 'Simple sugar produced during photosynthesis serving as energy storage.', clue_ga: 'Siúcra simplí a tháirgtear le linn fótaisintéise mar stóras fuinnimh.', answer_en: 'What is Glucose?', answer_ga: 'Cad é Glúcós?', explanation_en: 'Chemical formula C6H12O6.', explanation_ga: 'Foirmle cheimiceach C6H12O6.' },
+              { id: 'q-1-2-3', points: 300, clue_en: 'The green pigment in plants that absorbs solar energy.', clue_ga: 'An lí ghlas i bplandaí a ionsúnn fuinneamh na gréine.', answer_en: 'What is Chlorophyll?', answer_ga: 'Cad é Clóraifill?', explanation_en: 'Reflects green light wavelengths.', explanation_ga: 'Léiríonn sé tonnfhaid solais ghlais.' },
+              { id: 'q-1-2-4', points: 400, clue_en: 'Energy-carrying molecule known as the universal currency of life.', clue_ga: 'Móilín iompair fuinnimh ar a dtugtar airgeadra uilíoch na beatha.', answer_en: 'What is ATP?', answer_ga: 'Cad é ATP (Trífhosfáit Adanóisín)?', explanation_en: 'Adenosine Triphosphate.', explanation_ga: 'Trífhosfáit Adanóisín.' },
+              { id: 'q-1-2-5', points: 500, clue_en: 'Gas released as a byproduct of the light stage of photosynthesis.', clue_ga: 'Gás a scaoiltear mar sheachtháirge de chéim solais na fótaisintéise.', answer_en: 'What is Oxygen (O2)?', answer_ga: 'Cad é Ocsaigin (O2)?', explanation_en: 'Produced by photolysis of water.', explanation_ga: 'Táirgthe trí fhótalaíocht uisce.' },
+            ],
+          },
+          {
+            id: 'c-1-3',
+            name_en: 'Genetics & DNA',
+            name_ga: 'Géineolaíocht & DNA',
+            questions: [
+              { id: 'q-1-3-1', points: 100, clue_en: 'The double-helix macromolecule carrying genetic instructions in organisms.', clue_ga: 'An macramóilín dé-héilice a iompraíonn treoracha géiniteacha.', answer_en: 'What is DNA?', answer_ga: 'Cad é DNA?', explanation_en: 'Deoxyribonucleic acid.', explanation_ga: 'Aigéad dí-ocsairibeanúicléasach.' },
+              { id: 'q-1-3-2', points: 200, clue_en: 'Unit of heredity consisting of a specific segment of DNA coding for protein.', clue_ga: 'Aonad oidhreachta ar chuid ar leith de DNA é a chódaíonn próitéin.', answer_en: 'What is a Gene?', answer_ga: 'Cad é Géin?', explanation_en: 'Passed from parent to offspring.', explanation_ga: 'Faightear é ó na tuismitheoirí.' },
+              { id: 'q-1-3-3', points: 300, clue_en: 'The complementary nitrogenous base that pairs with adenine in DNA.', clue_ga: 'An bun nítrigineach comhlántach a phéireálann le hadainín i DNA.', answer_en: 'What is Thymine?', answer_ga: 'Cad é Tímín?', explanation_en: 'A pairs with T in DNA.', explanation_ga: 'A péireáilte le T i DNA.' },
+              { id: 'q-1-3-4', points: 400, clue_en: 'Cell division resulting in two genetically identical diploid daughter cells.', clue_ga: 'Rannán cille a tháirgeann dhá iníonchill dhéphlóideacha comhionanna.', answer_en: 'What is Mitosis?', answer_ga: 'Cad é Miotóis?', explanation_en: 'Used for growth and tissue repair.', explanation_ga: 'Úsáidtear é le haghaidh fáis agus deisiúcháin.' },
+              { id: 'q-1-3-5', points: 500, clue_en: 'Austrian monk known as the father of modern genetics for his pea plant experiments.', clue_ga: 'Manach Ostarach ar a dtugtar athair na géineolaíochta nua-aimseartha.', answer_en: 'Who is Gregor Mendel?', answer_ga: 'Cé hé Gregor Mendel?', explanation_en: 'Formulated the laws of inheritance.', explanation_ga: 'Leag sé síos dlíthe na hoidhreachta.' },
+            ],
+          },
+          {
+            id: 'c-1-4',
+            name_en: 'Human Biology & Systems',
+            name_ga: 'Bitheolaíocht an Duine & Córais',
+            questions: [
+              { id: 'q-1-4-1', points: 100, clue_en: 'The muscular organ that pumps blood throughout the circulatory system.', clue_ga: 'An t-orgán matánach a phéacann fuil tríd an gcóras imshruthaithe.', answer_en: 'What is the Heart?', answer_ga: 'Cad é an Croí?', explanation_en: 'Has four chambers in humans.', explanation_ga: 'Tá ceithre sheomra aige sa duine.' },
+              { id: 'q-1-4-2', points: 200, clue_en: 'Blood vessels that carry oxygenated blood away from the heart.', clue_ga: 'Fuileadáin a iompraíonn fuil ocsaiginithe amach ón gcroí.', answer_en: 'What are Arteries?', answer_ga: 'Cad iad Artairí?', explanation_en: 'Thick muscular walls to handle high pressure.', explanation_ga: 'Ballaí tiubha matánacha faoi bhrú ard.' },
+              { id: 'q-1-4-3', points: 300, clue_en: 'The largest organ in the human body protecting against external pathogens.', clue_ga: 'An t-orgán is mó i gcorp an duine a chosnaíonn ar phataiginí seachtracha.', answer_en: 'What is the Skin?', answer_ga: 'Cad é an Craiceann?', explanation_en: 'Part of the integumentary system.', explanation_ga: 'Cuid den chóras cumhdaigh.' },
+              { id: 'q-1-4-4', points: 400, clue_en: 'Gas exchange in the lungs takes place across these microscopic air sacs.', clue_ga: 'Tarlaíonn malartú gás sna scamhóga trasna na saic aeir bídeacha seo.', answer_en: 'What are Alveoli?', answer_ga: 'Cad iad Ailbheolais?', explanation_en: 'High surface area for diffusion.', explanation_ga: 'Achar dromchla mór le haghaidh idirleata.' },
+              { id: 'q-1-4-5', points: 500, clue_en: 'Hormone produced by the pancreas regulating blood glucose levels.', clue_ga: 'Hormón a tháirgtear sa phaincréas a rialaíonn leibhéal glúcóis fola.', answer_en: 'What is Insulin?', answer_ga: 'Cad é Inslin?', explanation_en: 'Facilitates glucose uptake into cells.', explanation_ga: 'Cuidíonn sé le cealla glúcós a ghlacadh isteach.' },
+            ],
+          },
+        ],
+      },
+    ];
+  } else if (isHistory) {
+    roundTemplates = [
+      {
+        id: 'round-1',
+        roundNumber: 1,
+        name_en: 'Jeopardy Round',
+        name_ga: 'Babhta 1: Jeopardy',
+        categories: [
+          {
+            id: 'c-1-1',
+            name_en: 'The 1916 Rising',
+            name_ga: 'Éirí Amach 1916',
+            questions: [
+              { id: 'q-1-1-1', points: 100, clue_en: 'The main Dublin building used as rebel headquarters during Easter 1916.', clue_ga: 'An príomhfhoirgneamh i mBaile Átha Cliath mar cheanncheathrú na reibiliúnaithe.', answer_en: 'What is the GPO (General Post Office)?', answer_ga: 'Cad é Ard-Oifig an Phoist (GPO)?', explanation_en: 'Located on O\'Connell Street.', explanation_ga: 'Lonnaithe ar Shráid Uí Chonaill.' },
+              { id: 'q-1-1-2', points: 200, clue_en: 'Leader who read the Proclamation of the Irish Republic on the GPO steps.', clue_ga: 'Ceannaire a léigh Forógra Phoblacht na hÉireann ar chéimeanna an GPO.', answer_en: 'Who is Patrick Pearse (Pádraig Mac Piarais)?', answer_ga: 'Cé hé Pádraig Mac Piarais?', explanation_en: 'Signatory of the 1916 Proclamation.', explanation_ga: 'Sínitheoir Fhorógra 1916.' },
+              { id: 'q-1-1-3', points: 300, clue_en: 'Socialist leader and founder of the Irish Citizen Army executed in 1916.', clue_ga: 'Ceannaire sóisialach agus bunaitheoir Arm Cathartha na hÉireann.', answer_en: 'Who is James Connolly?', answer_ga: 'Cé hé Séamus Ó Conghaile?', explanation_en: 'Executed while strapped to a chair.', explanation_ga: 'Cuireadh chun báis é i gCill Mhaighneann.' },
+              { id: 'q-1-1-4', points: 400, clue_en: 'Dublin prison where fourteen leaders of the 1916 Rising were executed.', clue_ga: 'Príosún i mBaile Átha Cliath inar cuireadh 14 cheannaire chun báis.', answer_en: 'What is Kilmainham Gaol?', answer_ga: 'Cad é Príosún Chill Mhaighneann?', explanation_en: 'Executions turned public opinion.', explanation_ga: 'D\'athraigh na básuithe dearcadh an phobail.' },
+              { id: 'q-1-1-5', points: 500, clue_en: 'Historic document declaring an independent Irish Republic in Easter 1916.', clue_ga: 'Doiciméad stairiúil a d\'fhógair Poblacht neamhspleách na hÉireann.', answer_en: 'What is the 1916 Proclamation (Forógra na Poblachta)?', answer_ga: 'Cad é Forógra na Poblachta?', explanation_en: 'Guaranteed religious and civil liberty.', explanation_ga: 'Gheall sé saoirse reiligiúnach agus shibhialta.' },
+            ],
+          },
+          {
+            id: 'c-1-2',
+            name_en: 'Medieval Ireland',
+            name_ga: 'Éire na Meánaoise',
+            questions: [
+              { id: 'q-1-2-1', points: 100, clue_en: 'Norse invaders who established Dublin and major port towns in Ireland.', clue_ga: 'Ionróirí Lochlannacha a bhunaigh Baile Átha Cliath agus calafoirt.', answer_en: 'Who are the Vikings (Lochlannaigh)?', answer_ga: 'Cé hiad na Lochlannaigh?', explanation_en: 'Arrived in the late 8th century.', explanation_ga: 'Tháinig siad ag deireadh an 8ú haois.' },
+              { id: 'q-1-2-2', points: 200, clue_en: 'High King of Ireland who defeated the Vikings at Clontarf in 1014.', clue_ga: 'Ard-Rí na hÉireann a bhris ar na Lochlannaigh ag Cluain Tarbh i 1014.', answer_en: 'Who is Brian Boru (Brian Bóramha)?', answer_ga: 'Cé hé Brian Bóramha?', explanation_en: 'Killed in his tent after the battle.', explanation_ga: 'Maraíodh ina phuball é tar éis an chatha.' },
+              { id: 'q-1-2-3', points: 300, clue_en: 'Anglo-Norman knight known as Strongbow who invaded Ireland in 1169.', clue_ga: 'Ridirí Angla-Normannach ar a dtugtar Strongbow a tháinig go hÉirinn i 1169.', answer_en: 'Who is Richard de Clare (Strongbow)?', answer_ga: 'Cé hé Richard de Clare (Strongbow)?', explanation_en: 'Married Aoife, daughter of Dermot MacMurrough.', explanation_ga: 'Phós sé Aoife, iníon Dhiarmada Mhic Mhurchadha.' },
+              { id: 'q-1-2-4', points: 400, clue_en: 'Stone tower houses built throughout medieval Ireland for defensive dwelling.', clue_ga: 'Tithe túir chloiche a tógadh ar fud na hÉireann mar dhaingnithe cosanta.', answer_en: 'What are Tower Houses / Castles?', answer_ga: 'Cad iad Caisleáin / Tithe Túir?', explanation_en: 'Prevalent in 15th-16th century Ireland.', explanation_ga: 'Coitianta in Éirinn sa 15ú agus 16ú haois.' },
+              { id: 'q-1-2-5', points: 500, clue_en: 'Area around Dublin directly controlled by the English Crown in the Middle Ages.', clue_ga: 'An limistéar timpeall Bhaile Átha Cliath faoi smacht díreach Choróin Shasana.', answer_en: 'What is The Pale (An Pháil)?', answer_ga: 'Cad é An Pháil?', explanation_en: 'Origin of phrase "beyond the pale".', explanation_ga: 'Bunús an nath "lasmuigh den pháil".' },
+            ],
+          },
+          {
+            id: 'c-1-3',
+            name_en: 'The War of Independence',
+            name_ga: 'Cogadh na Saoirse',
+            questions: [
+              { id: 'q-1-3-1', points: 100, clue_en: 'Irish revolutionary leader and Director of Intelligence nicknamed The Big Fellow.', clue_ga: 'Ceannaire réabhlóideach agus Stiúrthóir Faisnéise ar a dtugtar The Big Fellow.', answer_en: 'Who is Michael Collins (Mícheál Ó Coileáin)?', answer_ga: 'Cé hé Mícheál Ó Coileáin?', explanation_en: 'Masterminded the guerrilla campaign.', explanation_ga: 'D\'eagraigh sé an feachtas eadarnaí.' },
+              { id: 'q-1-3-2', points: 200, clue_en: 'Notorious British paramilitary force sent to Ireland in 1920 wearing mixed uniforms.', clue_ga: 'Fórsa paraimíleata Briotanach a seoladh go hÉirinn i 1920 i gculaith mheasctha.', answer_en: 'Who are the Black and Tans?', answer_ga: 'Cé hiad na Dúchrónaigh (Black and Tans)?', explanation_en: 'Known for brutal reprisals.', explanation_ga: 'Clúiteach as a gcuid brúidiúlachta.' },
+              { id: 'q-1-3-3', points: 300, clue_en: 'First meeting place of Dáil Éireann on 21 January 1919 in Dublin.', clue_ga: 'An chéad áit ar tháinig Dáil Éireann le chéile ar 21 Eanáir 1919.', answer_en: 'What is the Mansion House?', answer_ga: 'Cad é Teach an Mhéara (Mansion House)?', explanation_en: 'Adopted the Declaration of Independence.', explanation_ga: 'Ghlac siad le Dearbhú Neamhspleáchais.' },
+              { id: 'q-1-3-4', points: 400, clue_en: 'Guerrilla warfare tactic using small, mobile combat units to ambush enemies.', clue_ga: 'Beartán cogaíochta eadarnaí ag baint úsáid as aonaid bheaga soghluaiste.', answer_en: 'What are Flying Columns?', answer_ga: 'Cad iad Colúin Reatha (Flying Columns)?', explanation_en: 'Key strategy of IRA brigades.', explanation_ga: 'Príomhstraitéis de chuid bhriogáidí an IRA.' },
+              { id: 'q-1-3-5', points: 500, clue_en: 'Treaty signed in December 1921 creating the Irish Free State and causing Civil War.', clue_ga: 'Conradh a síníodh i mí na Nollag 1921 a bhunaigh Saorstát Éireann.', answer_en: 'What is the Anglo-Irish Treaty?', answer_ga: 'Cad é an Conradh Angla-Éireannach?', explanation_en: 'Split the republican movement.', explanation_ga: 'Snaidhm sé an ghluaiseacht phoblachtach.' },
+            ],
+          },
+          {
+            id: 'c-1-4',
+            name_en: 'Ancient Civilizations',
+            name_ga: 'Sean-Sibhialtachtaí',
+            questions: [
+              { id: 'q-1-4-1', points: 100, clue_en: 'Ancient Irish passage tomb in the Boyne Valley older than the Egyptian Pyramids.', clue_ga: 'Tuama pasáiste ársa i nGleann na Bóinne níos sine ná Pirimidí na hÉigipte.', answer_en: 'What is Newgrange (Sí an Bhrú)?', answer_ga: 'Cad é Sí an Bhrú (Newgrange)?', explanation_en: 'Illuminated at winter solstice.', explanation_ga: 'Lascann grian an gheimhridh an seomra.' },
+              { id: 'q-1-4-2', points: 200, clue_en: 'Ancient writing system of early Ireland carved on standing stones using notches.', clue_ga: 'Córas scríbhneoireachta ársa na hÉireann greanta ar chlocha seasaimh.', answer_en: 'What is Ogham?', answer_ga: 'Cad é an tOgham?', explanation_en: 'Used between the 4th and 9th centuries.', explanation_ga: 'Úsáidte idir an 4ú agus an 9ú haois.' },
+              { id: 'q-1-4-3', points: 300, clue_en: 'Mesopotamian rivers between which the world\'s earliest cities developed.', clue_ga: 'Aibhneacha na Measpatáime idir a dforbraíodh na chéad chathracha ar domhan.', answer_en: 'What are the Tigris and Euphrates?', answer_ga: 'Cad iad an Tiogras agus an Eofráit?', explanation_en: 'The Fertile Crescent cradle of civilization.', explanation_ga: 'Talamh thorthúil na sibhialtachta.' },
+              { id: 'q-1-4-4', points: 400, clue_en: 'Early form of democracy was developed in this ancient Greek city-state.', clue_ga: 'Forbraíodh luathfhoirm den daonlathas sa chathair-stát Gréagach ársa seo.', answer_en: 'What is Athens?', answer_ga: 'Cad é an Aithin?', explanation_en: 'Led by Pericles during golden age.', explanation_ga: 'Faoi cheannas Pericles sa ré órga.' },
+              { id: 'q-1-4-5', points: 500, clue_en: 'System of writing developed by the ancient Egyptians using pictorial symbols.', clue_ga: 'Córas scríbhneoireachta na Sean-Éigipte ag baint úsáide as siombailí pictiúrtha.', answer_en: 'What are Hieroglyphics?', answer_ga: 'Cad iad Iaroglaifigh?', explanation_en: 'Deciphered using the Rosetta Stone.', explanation_ga: 'Díchódaíodh iad leis an Leac Rosetta.' },
+            ],
+          },
+        ],
+      },
+    ];
+  } else {
+    // General Curriculum / Curaclam Ginearálta across STEM & Humanities
+    roundTemplates = [
+      {
+        id: 'round-1',
+        roundNumber: 1,
+        name_en: 'Jeopardy Round',
+        name_ga: 'Babhta 1: Jeopardy',
+        categories: [
+          {
+            id: 'c-1-1',
+            name_en: 'Living World & Nature',
+            name_ga: 'An Saol Beo & Dúlra',
+            questions: [
+              { id: 'q-1-1-1', points: 100, clue_en: 'The basic unit of life in all living organisms.', clue_ga: 'Aonad bunúsach na beatha i ngach orgánach beo.', answer_en: 'What is a Cell?', answer_ga: 'Cad é Cill?', explanation_en: 'Discovered by Robert Hooke.', explanation_ga: 'Aimsithe ag Robert Hooke.' },
+              { id: 'q-1-1-2', points: 200, clue_en: 'Process by which plants convert sunlight into chemical energy.', clue_ga: 'Próiseas trína n-iompaíonn plandaí solas na gréine go fuinneamh.', answer_en: 'What is Photosynthesis?', answer_ga: 'Cad é Fótaisintéis?', explanation_en: 'Occurs in chloroplasts.', explanation_ga: 'Tarlaíonn sé i gclóraplaist.' },
+              { id: 'q-1-1-3', points: 300, clue_en: 'Community of interacting organisms and their physical environment.', clue_ga: 'Pobal d\'orgánaigh idirghníomhacha agus a dtimpeallacht fhisiciúil.', answer_en: 'What is an Ecosystem?', answer_ga: 'Cad é Éiceachóras?', explanation_en: 'Includes biotic and abiotic factors.', explanation_ga: 'Cuimsíonn sé tosca bithacha agus aibitheacha.' },
+              { id: 'q-1-1-4', points: 400, clue_en: 'Molecule carrying hereditary blueprints for organism development.', clue_ga: 'Móilín a iompraíonn treoracha oidhreachta d\'fhorbairt an orgánaigh.', answer_en: 'What is DNA?', answer_ga: 'Cad é DNA?', explanation_en: 'Double helix structure.', explanation_ga: 'Struchtúr dé-héilice.' },
+              { id: 'q-1-1-5', points: 500, clue_en: 'Change in inherited characteristics of biological populations over generations.', clue_ga: 'Athrú ar thréithe oidhreachta daonraí bitheolaíocha thar ghlúnta.', answer_en: 'What is Evolution by Natural Selection?', answer_ga: 'Cad é Éabhlóid trí Roghnú Nádúrtha?', explanation_en: 'Proposed by Charles Darwin.', explanation_ga: 'Molta ag Charles Darwin.' },
+            ],
+          },
+          {
+            id: 'c-1-2',
+            name_en: 'Earth & Physical Geography',
+            name_ga: 'An Domhan & Tíreolaíocht Fhisiciúil',
+            questions: [
+              { id: 'q-1-2-1', points: 100, clue_en: 'Large rigid slabs of the Earth\'s lithosphere that move slowly.', clue_ga: 'Leaca móra do-lúbtha de litisféar an Domhain a ghluaiseann go mall.', answer_en: 'What are Tectonic Plates?', answer_ga: 'Cad iad Plátaí Teicteonacha?', explanation_en: 'Cause earthquakes and volcanoes.', explanation_ga: 'Cúisíonn siad creathanna talún agus bolcáin.' },
+              { id: 'q-1-2-2', points: 200, clue_en: 'The continuous movement of water on, above and below the surface of Earth.', clue_ga: 'Gluaiseacht leanúnach uisce ar, os cionn agus faoi bhun dhromchla an Domhain.', answer_en: 'What is the Water Cycle (Timthriall an Uisce)?', answer_ga: 'Cad é Timthriall an Uisce?', explanation_en: 'Evaporation, condensation, precipitation.', explanation_ga: 'Galú, comhdhlúthú, deascadh.' },
+              { id: 'q-1-2-3', points: 300, clue_en: 'Instrument used to measure and record atmospheric air pressure.', clue_ga: 'Ionstraim a úsáidtear chun brú aeir an atmaisféir a thomhas.', answer_en: 'What is a Barometer?', answer_ga: 'Cad é Baraiméadar?', explanation_en: 'Predicts weather changes.', explanation_ga: 'Tuarann sé athruithe aimsire.' },
+              { id: 'q-1-2-4', points: 400, clue_en: 'The molten rock beneath the Earth\'s crust before it erupts.', clue_ga: 'An charraig leáite faoi screamh an Domhain sula mbrúchtann sí.', answer_en: 'What is Magma?', answer_ga: 'Cad é Magma?', explanation_en: 'Called lava once on the surface.', explanation_ga: 'Glaoitear laibhe air ar an dromchla.' },
+              { id: 'q-1-2-5', points: 500, clue_en: 'The long-term shift in global average temperatures and weather patterns.', clue_ga: 'An t-aistriú fadtéarmach i meánteochtaí domhanda agus patrúin aimsire.', answer_en: 'What is Climate Change?', answer_ga: 'Cad é Athrú Aeráide?', explanation_en: 'Driven by greenhouse gas emissions.', explanation_ga: 'Tiomáinte ag astuithe gás ceaptha teasa.' },
+            ],
+          },
+          {
+            id: 'c-1-3',
+            name_en: 'Irish History & Heritage',
+            name_ga: 'Stair & Oidhreacht na hÉireann',
+            questions: [
+              { id: 'q-1-3-1', points: 100, clue_en: 'Historic rebellion that began in Dublin on Easter Monday in 1916.', clue_ga: 'Éirí amach stairiúil a thosaigh i mBaile Átha Cliath Luan Cásca 1916.', answer_en: 'What is the 1916 Easter Rising?', answer_ga: 'Cad é Éirí Amach na Cásca 1916?', explanation_en: 'Foundational event for modern Ireland.', explanation_ga: 'Bunimeacht do stát nua-aimseartha na hÉireann.' },
+              { id: 'q-1-3-2', points: 200, clue_en: 'World-famous 9th-century illuminated Gospel manuscript housed at Trinity College Dublin.', clue_ga: 'Lámhscríbhinn shoiscéil ón 9ú haois i gColáiste na Tríonóide.', answer_en: 'What is the Book of Kells (Leabhar Cheanannais)?', answer_ga: 'Cad é Leabhar Cheanannais?', explanation_en: 'Masterpiece of Celtic monastic art.', explanation_ga: 'Sárshaothar ealaíne manaí Ceilteacha.' },
+              { id: 'q-1-3-3', points: 300, clue_en: 'The disastrous blight in the 1840s that caused mass starvation and emigration in Ireland.', clue_ga: 'An dubhachan tubaisteach sna 1840idí a chúisigh gorta agus imirce.', answer_en: 'What is the Great Famine (An Gorta Mór)?', answer_ga: 'Cad é An Gorta Mór?', explanation_en: 'Potato crop failure 1845-1852.', explanation_ga: 'Teip ar bharr na bprátaí 1845-1852.' },
+              { id: 'q-1-3-4', points: 400, clue_en: 'Patron saint of Ireland credited with bringing Christianity in the 5th century.', clue_ga: 'Éarlamh na hÉireann a thug an Chríostaíocht go hÉirinn sa 5ú haois.', answer_en: 'Who is Saint Patrick (Naomh Pádraig)?', answer_ga: 'Cé hé Naomh Pádraig?', explanation_en: 'Celebrated globally on March 17.', explanation_ga: 'Déantar ceiliúradh air ar 17 Márta.' },
+              { id: 'q-1-3-5', points: 500, clue_en: 'Peace agreement signed on Good Friday 1998 resolving the Northern Ireland conflict.', clue_ga: 'Comhaontú síochána Aoine an Chéasta 1998 a chuir deireadh leis an gcoimhlint.', answer_en: 'What is the Good Friday Agreement (Comhaontú Aoine an Chéasta)?', answer_ga: 'Cad é Comhaontú Aoine an Chéasta?', explanation_en: 'Established devolved power-sharing.', explanation_ga: 'Bhunaigh sé comhroinnt cumhachta díláraithe.' },
+            ],
+          },
+          {
+            id: 'c-1-4',
+            name_en: 'Curriculum Concepts & Vocabulary',
+            name_ga: 'Coincheapa & Foclóir Curaclaim',
+            questions: [
+              { id: 'q-1-4-1', points: 100, clue_en: 'A proposed scientific explanation tested through experimentation.', clue_ga: 'Míniú eolaíoch molta a thástáiltear trí thurgnamh.', answer_en: 'What is a Hypothesis?', answer_ga: 'Cad é Hipitéis?', explanation_en: 'Foundation of the scientific method.', explanation_ga: 'Bonn an mhodha eolaíochta.' },
+              { id: 'q-1-4-2', points: 200, clue_en: 'A visual diagram illustrating numerical relationships and trends.', clue_ga: 'Léaráid amhairc a thaispeánann caidrimh uimhriúla agus treochtaí.', answer_en: 'What is a Graph / Chart?', answer_ga: 'Cad é Graf / Cairt?', explanation_en: 'e.g. bar chart, line graph.', explanation_ga: 'm.sh. barra-chairt, líne-ghraf.' },
+              { id: 'q-1-4-3', points: 300, clue_en: 'The legal protection granting exclusive rights to creators for original work.', clue_ga: 'Cosaint dhlíthiúil a thugann cearta eisiacha do chruthaitheoirí.', answer_en: 'What is Copyright?', answer_ga: 'Cad é Cóipcheart?', explanation_en: 'Protects literary and artistic works.', explanation_ga: 'Cosnaíonn sé saothair liteartha agus ealaíne.' },
+              { id: 'q-1-4-4', points: 400, clue_en: 'The ability to read, write, comprehend, and communicate effectively.', clue_ga: 'An cumas chun léamh, scríobh, tuiscint agus cumarsáid go héifeachtach.', answer_en: 'What is Literacy?', answer_ga: 'Cad é Litearthacht?', explanation_en: 'Core skill across the entire curriculum.', explanation_ga: 'Príomhscil trasna an churaclaim ar fad.' },
+              { id: 'q-1-4-5', points: 500, clue_en: 'Meeting present human needs without compromising the ability of future generations to meet theirs.', clue_ga: 'Freastal ar riachtanais an lae inniu gan dochar a dhéanamh do na glúnta atá le teacht.', answer_en: 'What is Sustainability / Forbairt Inbhuanaithe?', answer_ga: 'Cad é Forbairt Inbhuanaithe (Sustainability)?', explanation_en: 'Balancing economic, social, environmental needs.', explanation_ga: 'Cothromaíocht eacnamaíoch, shóisialta agus chomhshaoil.' },
+            ],
+          },
+        ],
+      },
+    ];
+  }
+
+  const gameTitle = title || `${detectedSubject} Jeopardy / Jeopardy Dátheangach`;
+  const gameDesc = description || (hasContent ? 'Bilingual game generated from Irish & English curriculum content' : 'Bilingual Jeopardy game ready for classroom interactive display.');
 
   return {
     id: 'game-demo-' + Date.now(),
     title: gameTitle,
-    subject: subject || 'General Curriculum',
+    subject: detectedSubject,
     description: gameDesc,
     sourceFiles: sourceFiles,
     fallbackUsed: true,
