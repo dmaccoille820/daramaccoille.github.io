@@ -144,16 +144,21 @@ export async function generateBilingualJeopardy(options: GenerateOptions): Promi
   const detectedSubject = inferSubject(userTitle, customInstructions, `${irishText} ${englishText}`);
 
   if (!apiKey) {
-    console.warn('Gemini API key not found. Using intelligent curriculum template generator.');
-    return generateSmartTemplateGame(
-      titlePrompt,
-      userDescription,
-      detectedSubject,
-      roundsCount,
-      customInstructions,
-      options.irishText,
-      options.englishText,
-      options.sourceFiles || []
+    if (options.apiKey === 'SKIP_GEMINI' || options.allowFallback) {
+      console.warn('Gemini API key not found. Using intelligent curriculum template generator.');
+      return generateSmartTemplateGame(
+        titlePrompt,
+        userDescription,
+        detectedSubject,
+        roundsCount,
+        customInstructions,
+        options.irishText,
+        options.englishText,
+        options.sourceFiles || []
+      );
+    }
+    throw new Error(
+      'No Gemini API Key provided. Please paste your Google AI Studio API key in the Teacher Factfile AI Studio (or set GEMINI_API_KEY in Vercel).'
     );
   }
 
@@ -365,26 +370,36 @@ REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
       rounds,
     };
   } catch (err) {
-    console.warn('[Gemini] Round-by-round generation failed:', (err as Error).message);
+    const errMsg = (err as Error).message || '';
+    console.warn('[Gemini] Round-by-round generation failed:', errMsg);
 
-    if (options.allowFallback !== false) {
-      console.warn('[Gemini] Falling back to Curriculum Engine template.');
-      const fallbackGame = generateSmartTemplateGame(
-        titlePrompt,
-        userDescription,
-        detectedSubject,
-        roundsCount,
-        customInstructions,
-        options.irishText,
-        options.englishText,
-        options.sourceFiles || []
-      );
-      fallbackGame.fallbackUsed = true;
-      fallbackGame.generationSource = 'curriculum-engine';
-      return fallbackGame;
+    // If it's an API key or auth issue, NEVER silently swallow it with a broken fallback!
+    if (
+      errMsg.includes('API_KEY') ||
+      errMsg.includes('blocked') ||
+      errMsg.includes('403') ||
+      errMsg.includes('401') ||
+      errMsg.includes('unauthorized') ||
+      errMsg.includes('No Gemini API') ||
+      !options.allowFallback
+    ) {
+      throw err;
     }
 
-    throw err;
+    console.warn('[Gemini] Falling back to Curriculum Engine template.');
+    const fallbackGame = generateSmartTemplateGame(
+      titlePrompt,
+      userDescription,
+      detectedSubject,
+      roundsCount,
+      customInstructions,
+      options.irishText,
+      options.englishText,
+      options.sourceFiles || []
+    );
+    fallbackGame.fallbackUsed = true;
+    fallbackGame.generationSource = 'curriculum-engine';
+    return fallbackGame;
   }
 }
 
@@ -396,11 +411,18 @@ function extractFactfileRounds(
   fallbackSubject: string
 ): Round[] {
   const combinedText = `${englishText}\n\n${irishText}`.trim();
-  // Split into raw candidate paragraphs / sections
+
+  // Extract all distinct, clean lines and sentences across the document
+  const allSentences = combinedText
+    .split(/(?:\r?\n|(?<=[.?!])\s+)/)
+    .map((s) => s.replace(/^[\s•*–—\-0-9.)]+/, '').trim())
+    .filter((s) => s.length > 20);
+
+  // Group candidate paragraphs / sections for category titles
   const rawBlocks = combinedText
-    .split(/(?:\r?\n\s*\r?\n|[0-9]+\.\s+|[A-Z]\.\s+|Section\s+[0-9]+[:.]?\s*)/i)
+    .split(/(?:\r?\n\s*\r?\n|[0-9]+\.\s+|Section\s+[0-9]+[:.]?\s*)/i)
     .map((b) => b.trim())
-    .filter((b) => b.length > 25);
+    .filter((b) => b.length > 20);
 
   const pointsByRound = [
     [100, 200, 300, 400, 500],
@@ -412,6 +434,7 @@ function extractFactfileRounds(
   const roundNamesGa = ['Babhta 1: Jeopardy', 'Babhta 2: Jeopardy Dúbailte', 'Babhta 3: Jeopardy Deiridh'];
 
   const rounds: Round[] = [];
+  let sentencePointer = 0;
 
   for (let rIdx = 0; rIdx < roundsCount; rIdx++) {
     const roundNum = rIdx + 1;
@@ -422,39 +445,48 @@ function extractFactfileRounds(
       const blockIdx = rIdx * 4 + cIdx;
       const block = rawBlocks[blockIdx % (rawBlocks.length || 1)] || '';
 
-      // Derive category title from first line or phrase (max 50 chars)
-      const firstLine = block.split(/[\r\n.:]/)[0]?.trim() || '';
-      const catNameEn = (firstLine.length > 3 && firstLine.length < 50
-        ? firstLine
+      // Derive clean category title
+      const cleanHeader = block
+        .split(/[\r\n.:–—]/)[0]
+        ?.replace(/^[\s•*–—\-0-9.)]+/, '')
+        ?.trim() || '';
+
+      const catNameEn = (cleanHeader.length > 3 && cleanHeader.length < 45
+        ? cleanHeader
         : `${fallbackSubject}: Topic ${cIdx + 1}`
       ).slice(0, 255);
-      const catNameGa = `${catNameEn} (Gaeilge)`;
-
-      // Split block into sentences for clues
-      const sentences = block
-        .split(/(?<=[.?!])\s+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 15);
+      const catNameGa = `${catNameEn} / Ábhar ${cIdx + 1}`;
 
       const questions: Question[] = [];
       for (let qIdx = 0; qIdx < 5; qIdx++) {
-        const sentence = sentences[qIdx % (sentences.length || 1)] || `Key curriculum concept relating to ${catNameEn}.`;
-        const clueEn = sentence.slice(0, 300);
-        const clueGa = `Coincheap curaclaim a bhaineann le ${catNameEn}: ${clueEn}`.slice(0, 300);
+        // Pick a unique sentence from the pool
+        const rawSentence = allSentences[sentencePointer % (allSentences.length || 1)] || `Core concept in ${catNameEn}.`;
+        sentencePointer++;
 
-        // Derive answer from key words
-        const words = sentence.split(/\s+/).filter((w) => w.length > 4);
-        const keyWord = words[0] || catNameEn;
+        // If the sentence has a term definition format ("Term – definition"), split it
+        let clue = rawSentence;
+        let answerTerm = '';
+        const defMatch = rawSentence.match(/^([A-Za-z0-9\s]{3,30})\s*[:–—\-]\s*(.+)$/);
+        if (defMatch) {
+          answerTerm = defMatch[1].trim();
+          clue = defMatch[2].trim();
+        } else {
+          const words = rawSentence.split(/\s+/).filter((w) => w.length > 4);
+          answerTerm = words[0] || catNameEn;
+        }
+
+        const clueEn = clue.slice(0, 300);
+        const clueGa = `Leid maidir le ${catNameEn}: ${clueEn}`.slice(0, 300);
 
         questions.push({
           id: `q-${roundNum}-${cIdx + 1}-${qIdx + 1}`,
           points: pts[qIdx],
           clue_en: clueEn,
           clue_ga: clueGa,
-          answer_en: `What is ${keyWord}?`,
-          answer_ga: `Cad é ${keyWord}?`,
-          explanation_en: `Curriculum factfile content for ${catNameEn}.`,
-          explanation_ga: `Ábhar bileog fíricí don chatagóir ${catNameEn}.`,
+          answer_en: `What is ${answerTerm}?`,
+          answer_ga: `Cad é ${answerTerm}?`,
+          explanation_en: `Factfile concept for ${catNameEn}.`,
+          explanation_ga: `Coincheap curaclaim don chatagóir ${catNameEn}.`,
           isDailyDouble: qIdx === 3 && cIdx === 2,
         });
       }

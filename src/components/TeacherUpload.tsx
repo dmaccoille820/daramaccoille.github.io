@@ -43,6 +43,32 @@ export const TeacherUpload: React.FC<TeacherUploadProps> = ({
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const [allowFallback, setAllowFallback] = useState(true);
 
+  // Load saved API key from localStorage on mount
+  React.useEffect(() => {
+    try {
+      const savedKey = localStorage.getItem('jeopardy_gemini_api_key');
+      if (savedKey) {
+        setApiKey(savedKey);
+        setShowApiKeyInput(true);
+      }
+    } catch (e) {
+      // Ignore localStorage errors
+    }
+  }, []);
+
+  const handleApiKeyChange = (val: string) => {
+    setApiKey(val);
+    try {
+      if (val.trim()) {
+        localStorage.setItem('jeopardy_gemini_api_key', val.trim());
+      } else {
+        localStorage.removeItem('jeopardy_gemini_api_key');
+      }
+    } catch (e) {
+      // Ignore localStorage errors
+    }
+  };
+
   // Status & Progress
   const [loading, setLoading] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -221,6 +247,9 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
       if (errMsg.includes('503') || errMsg.includes('504') || errMsg.toLowerCase().includes('timeout') || errMsg.toLowerCase().includes('overloaded')) {
         setIsTimeoutOrOverloadError(true);
       }
+      if (errMsg.includes('API_KEY') || errMsg.includes('blocked') || errMsg.includes('key') || errMsg.includes('403') || errMsg.includes('unauthorized')) {
+        setShowApiKeyInput(true);
+      }
       setError(errMsg);
     } finally {
       setLoading(false);
@@ -294,6 +323,13 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
                   </span>
                 )}
               </p>
+              {generatedGame.fallbackUsed && (
+                <p className="text-[11px] text-amber-300/90 mt-1 bg-amber-950/40 px-2.5 py-1 rounded-lg border border-amber-400/30">
+                  {language === 'ga'
+                    ? 'ℹ️ Gineadh an cluiche seo le hInneall an Churaclaim (Mód Neamhlíne). Chun réasúnaíocht Gemini & aistriúcháin fhíorúla a úsáid, cuir eochair phearsanta Gemini API isteach thíos.'
+                    : 'ℹ️ Generated via offline Curriculum Engine (Gemini API was not reached). To generate authentic bilingual clues and deep reasoning, enter your personal Gemini API key below.'}
+                </p>
+              )}
             </div>
           </div>
           <button
@@ -575,13 +611,26 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
           </div>
 
           {showApiKeyInput && (
-            <div className="mt-2 flex flex-col gap-2 p-3 bg-black/50 rounded-xl border border-blue-500/30 animate-fade-in">
+            <div className="mt-2 flex flex-col gap-2 p-3.5 bg-black/50 rounded-xl border border-amber-500/40 animate-fade-in">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wide">
+                  Gemini API Key (Google AI Studio)
+                </span>
+                <a
+                  href="https://aistudio.google.com/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-amber-400 hover:text-amber-300 underline font-semibold"
+                >
+                  Get a free Gemini API key (Google AI Studio) ↗
+                </a>
+              </div>
               <div className="flex flex-col sm:flex-row items-center gap-2">
                 <input
                   type="password"
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Paste Gemini API Key (or leave blank to use GEMINI_API_KEY from Vercel)"
+                  onChange={(e) => handleApiKeyChange(e.target.value)}
+                  placeholder="Paste your personal Gemini API key here (persists in your browser)"
                   className="flex-1 w-full px-3.5 py-2 rounded-xl bg-black/80 border border-amber-500/40 text-amber-200 placeholder-slate-500 text-xs focus:outline-none font-mono"
                 />
                 <button
@@ -594,6 +643,9 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
                   <span>Test Key</span>
                 </button>
               </div>
+              <p className="text-[10px] text-blue-200/70">
+                Your key is stored securely in your browser and used directly for parallel AI clue generation with authentic Irish translations.
+              </p>
 
               {keyTestStatus && (
                 <div

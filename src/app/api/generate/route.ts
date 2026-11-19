@@ -194,7 +194,7 @@ export async function POST(req: NextRequest) {
       roundsCount,
       apiKey: forceCurriculumEngine ? 'SKIP_GEMINI' : apiKey,
       customInstructions,
-      allowFallback: true
+      allowFallback: forceCurriculumEngine
     });
 
     game.sourceFiles = sourceFiles;
