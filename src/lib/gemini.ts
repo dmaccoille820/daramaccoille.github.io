@@ -1,11 +1,12 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { JeopardyGame, Round, Category, Question } from '@/types/jeopardy';
+import { JeopardyGame, Round, Category, Question, SourceFile } from '@/types/jeopardy';
 
 interface GenerateOptions {
   irishText: string;
   englishText: string;
   gameTitle?: string;
   gameDescription?: string;
+  sourceFiles?: SourceFile[];
   roundsCount?: number;
   apiKey?: string;
   customInstructions?: string;
@@ -151,7 +152,8 @@ export async function generateBilingualJeopardy(options: GenerateOptions): Promi
       roundsCount,
       customInstructions,
       options.irishText,
-      options.englishText
+      options.englishText,
+      options.sourceFiles || []
     );
   }
 
@@ -166,6 +168,7 @@ GAME PARAMETERS SPECIFIED BY THE TEACHER:
 - Title / Ábhar: "${titlePrompt}"
 ${userDescription ? `- Description / Cur Síos: "${userDescription}"` : ''}
 ${customInstructions ? `- Teacher's Custom Instructions ("Treoracha Breise"): "${customInstructions}"` : ''}
+${options.sourceFiles && options.sourceFiles.length > 0 ? `- Attached Source Files: ${options.sourceFiles.map((f) => `${f.name} (${f.language.toUpperCase()})`).join(', ')}` : ''}
 
 ${hasFactfiles ? `
 CURRICULUM FACTFILES PROVIDED BY TEACHER:
@@ -299,6 +302,7 @@ Output must adhere strictly to this JSON format (pure JSON only, no markdown wra
           title: finalTitle,
           subject: finalSubject,
           description: finalDescription,
+          sourceFiles: options.sourceFiles || [],
           fallbackUsed: false,
           generationSource: 'gemini',
           rounds: (parsed.rounds || []).map((r: { roundNumber: number; name_en: string; name_ga: string; categories: { name_en: string; name_ga: string; questions: { points: number; clue_en: string; clue_ga: string; answer_en: string; answer_ga: string; explanation_en?: string; explanation_ga?: string; }[] }[] }, rIdx: number) => ({
@@ -365,7 +369,8 @@ Output must adhere strictly to this JSON format (pure JSON only, no markdown wra
       roundsCount,
       customInstructions,
       options.irishText,
-      options.englishText
+      options.englishText,
+      options.sourceFiles || []
     );
     fallbackGame.fallbackUsed = true;
     fallbackGame.generationSource = 'curriculum-engine';
@@ -383,7 +388,8 @@ function generateSmartTemplateGame(
   roundsCount: number,
   customInstructions: string,
   irishExcerpt: string,
-  englishExcerpt: string
+  englishExcerpt: string,
+  sourceFiles: SourceFile[] = []
 ): JeopardyGame {
   const hasContent = irishExcerpt.length > 20 || englishExcerpt.length > 20;
   const sampleSubtitle = hasContent ? '(Curriculum Factfile Engine)' : '';
@@ -569,6 +575,7 @@ function generateSmartTemplateGame(
     title: gameTitle,
     subject: subject || 'General Curriculum',
     description: gameDesc,
+    sourceFiles: sourceFiles,
     fallbackUsed: true,
     generationSource: 'curriculum-engine',
     rounds: roundTemplates.slice(0, clampedRounds),

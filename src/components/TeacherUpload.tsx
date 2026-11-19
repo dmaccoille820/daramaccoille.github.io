@@ -287,6 +287,12 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
               <p className="text-xs text-emerald-300/80">
                 {generatedGame.title} • {generatedGame.rounds.length}{' '}
                 {language === 'ga' ? 'babhta(í) réidh le himirt' : 'round(s) ready to play'}
+                {generatedGame.sourceFiles && generatedGame.sourceFiles.length > 0 && (
+                  <span>
+                    {' '}• {generatedGame.sourceFiles.length}{' '}
+                    {language === 'ga' ? 'comhad foinse stóráilte i Neon' : 'source file(s) saved in Neon'}
+                  </span>
+                )}
               </p>
             </div>
           </div>

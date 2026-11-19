@@ -125,10 +125,17 @@ export async function saveGameToDb(
   const sql = neon(getConnectionString());
 
   try {
+    const sourceFilesJson = JSON.stringify(game.sourceFiles || []);
+
     // 1. Insert Game
     const gameResult = await sql`
-      INSERT INTO games (title, subject, description)
-      VALUES (${game.title}, ${game.subject || 'Digital Technology'}, ${game.description || ''})
+      INSERT INTO games (title, subject, description, source_files)
+      VALUES (
+        ${game.title},
+        ${game.subject || 'General Curriculum'},
+        ${game.description || ''},
+        ${sourceFilesJson}::jsonb
+      )
       RETURNING id
     `;
     const gameId = gameResult[0].id;
@@ -185,7 +192,7 @@ export async function getGamesFromDb(): Promise<JeopardyGame[]> {
   const sql = neon(getConnectionString());
   try {
     const games = await sql`
-      SELECT id, title, subject, description, created_at
+      SELECT id, title, subject, description, source_files, created_at
       FROM games
       ORDER BY created_at DESC
     `;
@@ -199,6 +206,7 @@ export async function getGamesFromDb(): Promise<JeopardyGame[]> {
       title: g.title,
       subject: g.subject,
       description: g.description,
+      sourceFiles: g.source_files || [],
       rounds: [],
       createdAt: g.created_at,
     }));
@@ -289,6 +297,7 @@ export async function getGameByIdFromDb(id: string): Promise<JeopardyGame | null
       title: g.title,
       subject: g.subject,
       description: g.description,
+      sourceFiles: g.source_files || [],
       rounds,
       createdAt: g.created_at,
     };

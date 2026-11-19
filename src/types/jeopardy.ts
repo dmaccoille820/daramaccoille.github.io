@@ -28,11 +28,22 @@ export interface Round {
   categories: Category[];
 }
 
+export interface SourceFile {
+  name: string;
+  size?: number;
+  type?: string;
+  language: 'ga' | 'en' | 'bilingual';
+  characterCount?: number;
+  uploadedAt?: string;
+  snippet?: string;
+}
+
 export interface JeopardyGame {
   id: string;
   title: string;
   subject?: string;
   description?: string;
+  sourceFiles?: SourceFile[];
   rounds: Round[];
   createdAt?: string;
   fallbackUsed?: boolean;

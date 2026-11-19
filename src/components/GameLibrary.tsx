@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { JeopardyGame, Language } from '@/types/jeopardy';
 import {
   BookOpen, Gamepad2, Trash2, RefreshCw, Search,
-  Calendar, Layers, AlertCircle, Loader2, DatabaseZap, ChevronRight
+  Calendar, Layers, AlertCircle, Loader2, DatabaseZap, ChevronRight, FileText
 } from 'lucide-react';
 
 interface GameLibraryProps {
@@ -251,6 +251,22 @@ export const GameLibrary: React.FC<GameLibraryProps> = ({
                     <p className="text-xs text-blue-300/60 line-clamp-2 leading-relaxed">
                       {game.description}
                     </p>
+                  )}
+
+                  {/* Attached Source Files */}
+                  {game.sourceFiles && game.sourceFiles.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      {game.sourceFiles.map((sf, idx) => (
+                        <span
+                          key={idx}
+                          title={`${sf.name} (${sf.characterCount || 0} characters)`}
+                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-blue-950/80 border border-blue-500/20 text-blue-300 font-mono max-w-full truncate"
+                        >
+                          <FileText className="w-2.5 h-2.5 shrink-0 text-amber-400" />
+                          <span className="truncate">{sf.name}</span>
+                        </span>
+                      ))}
+                    </div>
                   )}
 
                   {/* Meta row */}
