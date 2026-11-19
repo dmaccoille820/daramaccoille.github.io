@@ -202,12 +202,17 @@ export async function POST(req: NextRequest) {
     let savedToDb = false;
     let savedGameId = game.id;
 
-    if (autoSave && isDbConfigured()) {
+    // Only save real AI-generated games — never save fallback/template games
+    if (autoSave && isDbConfigured() && !game.fallbackUsed) {
       const saveResult = await saveGameToDb(game);
       if (saveResult.success) {
         savedToDb = true;
         savedGameId = saveResult.gameId || game.id;
+      } else {
+        console.warn('[Route] DB save failed:', saveResult.error);
       }
+    } else if (game.fallbackUsed) {
+      console.log('[Route] Curriculum Engine fallback used — skipping DB save (not teacher content).');
     }
 
     return NextResponse.json({

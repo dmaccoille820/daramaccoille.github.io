@@ -159,269 +159,225 @@ export async function generateBilingualJeopardy(options: GenerateOptions): Promi
 
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  const prompt = `
-You are a bilingual Irish-English Master Educator across all subjects in the Irish secondary curriculum (Junior Cycle and Leaving Certificate, including STEM, Humanities, Languages, Social Sciences, Business, and Digital Technologies).
+  // ── Build a focused single-round prompt ──────────────────────────────────
+  const buildRoundPrompt = (roundIndex: number) => {
+    const roundNum = roundIndex + 1;
+    const pointRows = [
+      '100, 200, 300, 400, 500',
+      '200, 400, 600, 800, 1000',
+      '300, 600, 900, 1200, 1500',
+    ];
+    const roundLabel = ['Jeopardy Round', 'Double Jeopardy Round', 'Final Jeopardy Round'][roundIndex];
+    const roundLabelGa = ['Babhta 1: Jeopardy', 'Babhta 2: Jeopardy Dúbailte', 'Babhta 3: Jeopardy Deiridh'][roundIndex];
 
-TASK: Generate an authentic, diverse, and engaging bilingual Jeopardy game with exactly ${roundsCount} round(s).
+    return `You are a bilingual Irish-English Master Educator for the Irish secondary curriculum (Junior Cycle & Leaving Certificate).
 
-GAME PARAMETERS SPECIFIED BY THE TEACHER:
+TASK: Generate ROUND ${roundNum} ONLY of a ${roundsCount}-round bilingual Jeopardy game.
+
+GAME CONTEXT:
 - Title / Ábhar: "${titlePrompt}"
 ${userDescription ? `- Description / Cur Síos: "${userDescription}"` : ''}
-${customInstructions ? `- Teacher's Custom Instructions ("Treoracha Breise"): "${customInstructions}"` : ''}
+${customInstructions ? `- Teacher's Custom Instructions (Treoracha Breise): "${customInstructions}"` : ''}
 ${options.sourceFiles && options.sourceFiles.length > 0 ? `- Attached Source Files: ${options.sourceFiles.map((f) => `${f.name} (${f.language.toUpperCase()})`).join(', ')}` : ''}
 
-${hasFactfiles ? `
-CURRICULUM FACTFILES PROVIDED BY TEACHER:
-${englishText ? `--- ENGLISH FACTFILE ---\n${englishText.slice(0, 9000)}\n` : ''}
-${irishText ? `--- GAEILGE (IRISH) FACTFILE ---\n${irishText.slice(0, 9000)}\n` : ''}
-
-SOURCE INSTRUCTIONS:
-- You MUST extract the clues, questions, facts, and concepts directly from the provided factfile(s).
-- If only one language was provided (e.g. only English or only Irish), translate and align faithfully to create the counterpart language for all clues, answers, and category names.
-` : `
-NO FACTFILES ATTACHED (MANUAL PROMPT & INSTRUCTION CREATION PATH):
-- The teacher has NOT uploaded PDF factfiles. You MUST use the Game Title, Description, and Teacher's Custom Instructions ("Treoracha Breise") above as your syllabus brief.
-- Generate high-quality, authentic, diverse, and curriculum-aligned questions and categories covering this topic thoroughly.
+${hasFactfiles ? `CURRICULUM FACTFILES (extract ALL questions from this content ONLY):
+${englishText ? `--- ENGLISH FACTFILE ---\n${englishText.slice(0, 10000)}\n` : ''}
+${irishText ? `--- GAEILGE (IRISH) FACTFILE ---\n${irishText.slice(0, 10000)}\n` : ''}
+CRITICAL: Every clue MUST be drawn directly from the factfile content above. Do NOT use generic Digital Technology or Computer Science content unless that IS the uploaded factfile topic.
+` : `NO FACTFILES: Use the Title, Description, and Teacher Instructions above as your curriculum brief.
+Generate high-quality, topic-specific questions aligned to the subject specified — do NOT default to generic Digital Technology content.
 `}
 
-CRUCIAL RULES FOR AUTHENTIC BILINGUAL JEOPARDY:
-1. CATEGORIES:
-   - For each round, create 4 distinct, engaging, creative categories directly pertinent to the specified topic and curriculum (do NOT revert to generic computer hardware unless that is the requested topic).
-   - Each category MUST have an accurate English name ("name_en") and an authentic Irish translation/name ("name_ga") using appropriate terminology from Téarma.ie.
-2. ROUNDS & POINT PROGRESSION:
-   - Create exactly ${roundsCount} round(s).
-   - Each category in a round MUST contain exactly 5 questions with standard point values:
-     - Round 1: 100, 200, 300, 400, 500
-     - Round 2: 200, 400, 600, 800, 1000
-     - Round 3: 300, 600, 900, 1200, 1500
-   - Difficulty should increase smoothly with point value.
-3. QUESTIONS & DUAL-LANGUAGE HOT SWITCH ALIGNMENT:
-   - For every question provide:
-     - "points": number
-     - "clue_en": Concise Jeopardy clue statement in English (max 20 words).
-     - "clue_ga": The direct, accurate Irish translation of that exact clue statement.
-     - "answer_en": Phrased as a question in English ("What is...", "Who is...", "What are...", "Where is...").
-     - "answer_ga": Phrased as a question in Irish ("Cad é...", "Céard é...", "Cé hé/hí...", "Cad iad...", "Cá bhfuil...").
-     - "explanation_en": Brief 1-sentence explanatory context in English.
-     - "explanation_ga": Brief 1-sentence explanatory context in Irish.
-   - The English and Irish clues MUST correspond to the EXACT same concept so the teacher can hit the "Hot Switch Language" button mid-round and display seamlessly in either language.
-4. METADATA:
-   - "title": Use the teacher's title "${titlePrompt}" (or an authentic bilingual version if suitable).
-   - "subject": Identify the curriculum subject accurately (e.g. "Biology", "History", "Geography", "Digital Technology", "Business", "Gaeilge", "Science").
-   - "description": Provide an engaging, informative description summarizing what this game covers (incorporating the teacher's description if provided).
+ROUND ${roundNum} RULES:
+- Round name (English): "${roundLabel}"
+- Round name (Irish): "${roundLabelGa}"
+- Create exactly 4 categories, each with exactly 5 questions
+- Point values: ${pointRows[roundIndex]}
+- Categories must be distinct thematic groupings from the factfile/topic
+- Do NOT use generic "Data & Storage", "Hardware & CPU", "Networks" etc. unless the topic IS Digital Technology
 
-Output must adhere strictly to this JSON format (pure JSON only, no markdown wrapping):
+REQUIRED JSON FORMAT (output ONLY valid JSON, no markdown):
 {
-  "title": "${titlePrompt}",
-  "subject": "${detectedSubject}",
-  "description": "${userDescription || 'Cluiche dátheangach Jeopardy / Bilingual Jeopardy Game'}",
-  "rounds": [
+  "roundNumber": ${roundNum},
+  "name_en": "${roundLabel}",
+  "name_ga": "${roundLabelGa}",
+  "categories": [
     {
-      "roundNumber": 1,
-      "name_en": "Jeopardy Round",
-      "name_ga": "Babhta 1: Jeopardy",
-      "categories": [
+      "name_en": "Category Name in English",
+      "name_ga": "Ainm an Chatagóir i nGaeilge",
+      "questions": [
         {
-          "name_en": "Category Name in English",
-          "name_ga": "Ainm an Chatagóir i nGaeilge",
-          "questions": [
-            {
-              "points": 100,
-              "clue_en": "English clue statement",
-              "clue_ga": "Ráiteas leide i nGaeilge",
-              "answer_en": "What is ...?",
-              "answer_ga": "Cad é ...?",
-              "explanation_en": "Short context",
-              "explanation_ga": "Comhthéacs gairid"
-            }
-          ]
+          "points": ${roundNum === 1 ? 100 : roundNum === 2 ? 200 : 300},
+          "clue_en": "English clue (max 20 words)",
+          "clue_ga": "Ráiteas leide i nGaeilge",
+          "answer_en": "What is ...?",
+          "answer_ga": "Cad é ...?",
+          "explanation_en": "One sentence context",
+          "explanation_ga": "Comhthéacs aon abairt"
         }
       ]
     }
   ]
-}
-`;
+}`;
+  };
 
-  // Start with high-speed models that support fast JSON responses
-  const primaryModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-8b'];
-  let candidateModels = primaryModels;
+  // ── Normalizer for a single parsed round object ───────────────────────────
+  const normalizeRound = (raw: Record<string, unknown>, rIdx: number) => {
+    const pointsByRound = [
+      [100, 200, 300, 400, 500],
+      [200, 400, 600, 800, 1000],
+      [300, 600, 900, 1200, 1500],
+    ];
+    const roundNum = typeof raw.roundNumber === 'number' ? raw.roundNumber :
+                     typeof raw.round_number === 'number' ? raw.round_number : rIdx + 1;
+    const roundNameEn = (raw.name_en ?? raw.round_name_en ?? raw.name ?? `Round ${roundNum}`) as string;
+    const roundNameGa = (raw.name_ga ?? raw.round_name_ga ?? raw.name_irish ?? `Babhta ${roundNum}`) as string;
+    const rawCats: Record<string, unknown>[] = Array.isArray(raw.categories) ? raw.categories as Record<string, unknown>[] : [];
+    const pts = pointsByRound[rIdx] || pointsByRound[0];
 
-  let lastError: Error | null = null;
-  const startTime = Date.now();
-  // Gateway safety deadline: don't let calls exceed 28 seconds to prevent HTTP 504
-  const MAX_ONLINE_WINDOW_MS = 28000;
+    const categories = rawCats.map((c: Record<string, unknown>, cIdx: number) => {
+      const nameEn = (c.name_en ?? c.name ?? c.category_name ?? c.category ?? c.title ?? `Category ${cIdx + 1}`) as string;
+      const nameGa = (c.name_ga ?? c.name_irish ?? c.category_ga ?? c.name_gle ?? c.gaeilge ?? c.irish ?? nameEn ?? `Catagóir ${cIdx + 1}`) as string;
+      const rawQs: Record<string, unknown>[] = Array.isArray(c.questions) ? c.questions as Record<string, unknown>[] : [];
 
-  for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
-    const modelName = candidateModels[mIdx];
-
-    // If approaching server gateway timeout limit, break out and fall back safely
-    if (Date.now() - startTime > MAX_ONLINE_WINDOW_MS) {
-      console.warn(`Approaching gateway timeout limit (${Date.now() - startTime}ms). Safe fallback triggered.`);
-      break;
-    }
-
-    // Attempt generation with backoff (up to 2 retries on 503/429/timeout)
-    const MAX_RETRIES = 2;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      if (Date.now() - startTime > MAX_ONLINE_WINDOW_MS) break;
-
-      try {
-        console.log(`[Gemini] Attempting ${modelName} (attempt ${attempt + 1}/${MAX_RETRIES + 1})...`);
-        options.onProgress?.(`Contacting Gemini (${modelName})...`);
-
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: 'application/json',
-            maxOutputTokens: 8192,
-          },
-        });
-
-        // Run with an internal promise timeout per call
-        const generatePromise = model.generateContent(prompt);
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Model response timed out (504 limit protection)')), 22000)
-        );
-
-        const result = await Promise.race([generatePromise, timeoutPromise]);
-        const text = result.response.text();
-
-        let cleanJson = text.trim();
-        if (cleanJson.startsWith('```')) {
-          cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-        }
-
-        const parsed = JSON.parse(cleanJson);
-
-        const finalTitle = userTitle || parsed.title || titlePrompt;
-        const finalSubject = parsed.subject || detectedSubject;
-        const finalDescription = userDescription || parsed.description || 'Bilingual game generated from Irish & English curriculum content';
-
-        // ── Robust normalizer: handles any key variation Gemini might return ──
-        const normalizeRounds = (rawRounds: unknown[], rCount: number) => {
-          const pointsByRound = [
-            [100, 200, 300, 400, 500],
-            [200, 400, 600, 800, 1000],
-            [300, 600, 900, 1200, 1500],
-          ];
-
-          return rawRounds.slice(0, rCount).map((raw, rIdx: number) => {
-            const r = raw as Record<string, unknown>;
-            const roundNum = (typeof r.roundNumber === 'number' ? r.roundNumber : typeof r.round_number === 'number' ? r.round_number : rIdx + 1);
-            const roundNameEn = (r.name_en ?? r.round_name_en ?? r.name ?? `Round ${roundNum}`) as string;
-            const roundNameGa = (r.name_ga ?? r.round_name_ga ?? r.name_irish ?? `Babhta ${roundNum}`) as string;
-
-            const rawCats: Record<string, unknown>[] = Array.isArray(r.categories) ? r.categories as Record<string, unknown>[] : [];
-            const pts = pointsByRound[rIdx] || pointsByRound[0];
-
-            const categories = rawCats.map((c: Record<string, unknown>, cIdx: number) => {
-              // Accept any plausible key name Gemini might emit
-              const nameEn = (
-                c.name_en ?? c.name ?? c.category_name ?? c.category ?? c.title ?? `Category ${cIdx + 1}`
-              ) as string;
-              const nameGa = (
-                c.name_ga ?? c.name_irish ?? c.category_ga ?? c.name_gle ?? c.gaeilge ?? c.irish ?? nameEn ?? `Catagóir ${cIdx + 1}`
-              ) as string;
-
-              const rawQs: Record<string, unknown>[] = Array.isArray(c.questions) ? c.questions as Record<string, unknown>[] : [];
-
-              const questions = rawQs.map((q: Record<string, unknown>, qIdx: number) => {
-                const ptVal = typeof q.points === 'number' ? q.points : pts[qIdx] ?? (qIdx + 1) * (rIdx + 1) * 100;
-                return {
-                  id: `q-${roundNum}-${cIdx + 1}-${qIdx + 1}`,
-                  points: ptVal,
-                  clue_en: ((q.clue_en ?? q.clue ?? q.question_en ?? q.question ?? 'Clue unavailable') as string).slice(0, 500),
-                  clue_ga: ((q.clue_ga ?? q.clue_irish ?? q.question_ga ?? q.clue_en ?? q.clue ?? 'Leide gan fáil') as string).slice(0, 500),
-                  answer_en: ((q.answer_en ?? q.answer ?? q.answer_english ?? 'What is the answer?') as string).slice(0, 500),
-                  answer_ga: ((q.answer_ga ?? q.answer_irish ?? q.answer_gle ?? q.answer_en ?? q.answer ?? 'Cad é an freagra?') as string).slice(0, 500),
-                  explanation_en: ((q.explanation_en ?? q.explanation ?? q.context_en ?? '') as string).slice(0, 500) || undefined,
-                  explanation_ga: ((q.explanation_ga ?? q.explanation_irish ?? q.context_ga ?? '') as string).slice(0, 500) || undefined,
-                  isDailyDouble: qIdx === 3 && cIdx === 2,
-                };
-              });
-
-              return {
-                id: `cat-${roundNum}-${cIdx + 1}`,
-                name_en: nameEn.slice(0, 255),
-                name_ga: nameGa.slice(0, 255),
-                questions,
-              };
-            });
-
-            return {
-              id: `round-${roundNum}`,
-              roundNumber: roundNum,
-              name_en: roundNameEn.slice(0, 100),
-              name_ga: roundNameGa.slice(0, 100),
-              categories,
-            };
-          });
-        };
-
-        const normalizedRounds = normalizeRounds(parsed.rounds || [], roundsCount);
-        console.log(`[Gemini] Parsed ${normalizedRounds.length} rounds, categories: ${normalizedRounds.map(r => r.categories.length).join(', ')}`);
-
+      const questions = rawQs.map((q: Record<string, unknown>, qIdx: number) => {
+        const ptVal = typeof q.points === 'number' ? q.points : pts[qIdx] ?? (qIdx + 1) * (rIdx + 1) * 100;
         return {
-          id: 'game-' + Date.now(),
-          title: finalTitle,
-          subject: finalSubject,
-          description: finalDescription,
-          sourceFiles: options.sourceFiles || [],
-          fallbackUsed: false,
-          generationSource: 'gemini',
-          rounds: normalizedRounds,
+          id: `q-${roundNum}-${cIdx + 1}-${qIdx + 1}`,
+          points: ptVal,
+          clue_en: ((q.clue_en ?? q.clue ?? q.question_en ?? q.question ?? 'Clue unavailable') as string).slice(0, 500),
+          clue_ga: ((q.clue_ga ?? q.clue_irish ?? q.question_ga ?? q.clue_en ?? q.clue ?? 'Leide gan fáil') as string).slice(0, 500),
+          answer_en: ((q.answer_en ?? q.answer ?? q.answer_english ?? 'What is the answer?') as string).slice(0, 500),
+          answer_ga: ((q.answer_ga ?? q.answer_irish ?? q.answer_gle ?? q.answer_en ?? q.answer ?? 'Cad é an freagra?') as string).slice(0, 500),
+          explanation_en: ((q.explanation_en ?? q.explanation ?? q.context_en ?? '') as string).slice(0, 500) || undefined,
+          explanation_ga: ((q.explanation_ga ?? q.explanation_irish ?? q.context_ga ?? '') as string).slice(0, 500) || undefined,
+          isDailyDouble: qIdx === 3 && cIdx === 2,
         };
-      } catch (err) {
-        const errMsg = (err as Error).message || '';
-        lastError = err as Error;
-        console.warn(`[Gemini] ${modelName} error on attempt ${attempt + 1}:`, errMsg);
+      });
 
-        if (errMsg.includes('API_KEY_SERVICE_BLOCKED')) {
-          throw new Error(
-            'Google Generative Language API is blocked on this key/project (API_KEY_SERVICE_BLOCKED). Please ensure Generative Language API is enabled in Google Cloud Console or use a key from a personal Google account.'
-          );
-        }
+      return {
+        id: `cat-${roundNum}-${cIdx + 1}`,
+        name_en: nameEn.slice(0, 255),
+        name_ga: nameGa.slice(0, 255),
+        questions,
+      };
+    });
 
-        // If it's a 404 or unsupported model, don't retry this model, jump to next candidate
-        if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('not supported')) {
+    return {
+      id: `round-${roundNum}`,
+      roundNumber: roundNum,
+      name_en: roundNameEn.slice(0, 100),
+      name_ga: roundNameGa.slice(0, 100),
+      categories,
+    };
+  };
+
+  // ── Attempt a single round with model fallback + retries ─────────────────
+  const PRIMARY_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-8b'];
+  const PER_CALL_TIMEOUT_MS = 45000; // 45s per round call; Vercel function allows 60s total
+  const MAX_RETRIES = 1;
+
+  const generateOneRound = async (roundIndex: number): Promise<ReturnType<typeof normalizeRound>> => {
+    const prompt = buildRoundPrompt(roundIndex);
+    let lastErr: Error | null = null;
+
+    for (const modelName of PRIMARY_MODELS) {
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          console.log(`[Gemini] Round ${roundIndex + 1} — ${modelName} attempt ${attempt + 1}`);
+          options.onProgress?.(`Round ${roundIndex + 1}: contacting Gemini (${modelName})...`);
+
+          const model = genAI.getGenerativeModel({
+            model: modelName,
+            generationConfig: {
+              temperature: 0.3,
+              responseMimeType: 'application/json',
+              maxOutputTokens: 4096,
+            },
+          });
+
+          const result = await Promise.race([
+            model.generateContent(prompt),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Round timed out after 45s')), PER_CALL_TIMEOUT_MS)
+            ),
+          ]);
+
+          const text = result.response.text().trim();
+          const cleanJson = text.startsWith('```')
+            ? text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
+            : text;
+
+          const parsed = JSON.parse(cleanJson) as Record<string, unknown>;
+          const normalized = normalizeRound(parsed, roundIndex);
+          console.log(`[Gemini] Round ${roundIndex + 1} OK — ${normalized.categories.length} categories`);
+          return normalized;
+        } catch (err) {
+          lastErr = err as Error;
+          const msg = lastErr.message || '';
+          console.warn(`[Gemini] Round ${roundIndex + 1} ${modelName} attempt ${attempt + 1} failed:`, msg);
+
+          if (msg.includes('API_KEY_SERVICE_BLOCKED')) {
+            throw new Error('Google Generative Language API is blocked on this key (API_KEY_SERVICE_BLOCKED).');
+          }
+          if (msg.includes('404') || msg.includes('not found') || msg.includes('not supported')) {
+            break; // Try next model
+          }
+          if (isRetryableGeminiError(msg) && attempt < MAX_RETRIES) {
+            const backoffMs = 1500 + Math.random() * 1000;
+            await sleep(backoffMs);
+            continue;
+          }
           break;
         }
-
-        // If it's 503 (overloaded) or 504 (timeout) or 429 (rate-limited), apply exponential backoff
-        if (isRetryableGeminiError(errMsg) && attempt < MAX_RETRIES) {
-          const backoffMs = Math.min(1200 * Math.pow(1.8, attempt) + Math.random() * 400, 3500);
-          console.log(`[Gemini Backoff] 503/504/429 detected. Backing off for ${Math.round(backoffMs)}ms before retry...`);
-          options.onProgress?.(`Gemini is busy (503/overloaded). Backing off for ${Math.round(backoffMs / 1000)}s...`);
-          await sleep(backoffMs);
-          continue; // Retry same model
-        }
-
-        // If retries exhausted for this model, try next candidate model
-        break;
       }
     }
-  }
+    throw lastErr || new Error(`All models failed for round ${roundIndex + 1}`);
+  };
 
-  // If online models returned 503/504 or were unavailable and allowFallback is true:
-  if (options.allowFallback !== false) {
-    console.warn('Gemini online service unavailable or timed out (503/504). Automatically falling back to Curriculum Engine so classroom play is never blocked.');
-    const fallbackGame = generateSmartTemplateGame(
-      titlePrompt,
-      userDescription,
-      detectedSubject,
-      roundsCount,
-      customInstructions,
-      options.irishText,
-      options.englishText,
-      options.sourceFiles || []
-    );
-    fallbackGame.fallbackUsed = true;
-    fallbackGame.generationSource = 'curriculum-engine';
-    return fallbackGame;
-  }
+  // ── Main generation: one round at a time ─────────────────────────────────
+  try {
+    const rounds = [];
+    for (let i = 0; i < roundsCount; i++) {
+      const round = await generateOneRound(i);
+      rounds.push(round);
+    }
 
-  throw lastError || new Error('Gemini service unavailable (503/504). Please try again or use Curriculum Engine.');
+    const finalTitle = userTitle || titlePrompt;
+    const finalDescription = userDescription || 'Bilingual game generated from Irish & English curriculum content';
+
+    return {
+      id: 'game-' + Date.now(),
+      title: finalTitle,
+      subject: detectedSubject,
+      description: finalDescription,
+      sourceFiles: options.sourceFiles || [],
+      fallbackUsed: false,
+      generationSource: 'gemini',
+      rounds,
+    };
+  } catch (err) {
+    console.warn('[Gemini] Round-by-round generation failed:', (err as Error).message);
+
+    if (options.allowFallback !== false) {
+      console.warn('[Gemini] Falling back to Curriculum Engine template.');
+      const fallbackGame = generateSmartTemplateGame(
+        titlePrompt,
+        userDescription,
+        detectedSubject,
+        roundsCount,
+        customInstructions,
+        options.irishText,
+        options.englishText,
+        options.sourceFiles || []
+      );
+      fallbackGame.fallbackUsed = true;
+      fallbackGame.generationSource = 'curriculum-engine';
+      return fallbackGame;
+    }
+
+    throw err;
+  }
 }
 
 // Fallback generator when offline or no API key is specified yet
