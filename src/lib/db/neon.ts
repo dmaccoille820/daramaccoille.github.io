@@ -123,62 +123,100 @@ export async function saveGameToDb(
   }
 
   const sql = neon(getConnectionString());
+  let gameId: string | undefined;
 
   try {
     const sourceFilesJson = JSON.stringify(game.sourceFiles || []);
+
+    // Helper: guarantee a non-empty string with a fallback
+    const str = (val: unknown, fallback: string, maxLen = 500): string => {
+      const s = (typeof val === 'string' ? val : String(val ?? '')).trim();
+      return (s || fallback).slice(0, maxLen);
+    };
 
     // 1. Insert Game
     const gameResult = await sql`
       INSERT INTO games (title, subject, description, source_files)
       VALUES (
-        ${game.title},
-        ${game.subject || 'General Curriculum'},
-        ${game.description || ''},
+        ${str(game.title, 'Bilingual Jeopardy Game', 255)},
+        ${str(game.subject, 'General Curriculum', 100)},
+        ${str(game.description, 'Bilingual Jeopardy game')},
         ${sourceFilesJson}::jsonb
       )
       RETURNING id
     `;
-    const gameId = gameResult[0].id;
+    gameId = gameResult[0].id;
+    console.log(`[DB] Game inserted: ${gameId} — "${game.title}"`);
 
     // 2. Insert Rounds
     for (const round of game.rounds) {
+      const roundNum = typeof round.roundNumber === 'number' ? Math.max(1, Math.min(round.roundNumber, 10)) : 1;
       const roundResult = await sql`
         INSERT INTO rounds (game_id, round_number, round_name_en, round_name_ga)
-        VALUES (${gameId}, ${round.roundNumber}, ${round.name_en}, ${round.name_ga})
+        VALUES (
+          ${gameId},
+          ${roundNum},
+          ${str(round.name_en, `Round ${roundNum}`, 100)},
+          ${str(round.name_ga, `Babhta ${roundNum}`, 100)}
+        )
         RETURNING id
       `;
       const roundId = roundResult[0].id;
+      console.log(`[DB] Round ${roundNum} inserted: ${roundId} with ${round.categories.length} categories`);
 
       // 3. Insert Categories
       for (let cIdx = 0; cIdx < round.categories.length; cIdx++) {
         const cat = round.categories[cIdx];
+        const catNameEn = str(cat.name_en, `Category ${cIdx + 1}`, 255);
+        const catNameGa = str(cat.name_ga, `Catagóir ${cIdx + 1}`, 255);
+
         const catResult = await sql`
           INSERT INTO categories (round_id, name_en, name_ga, position)
-          VALUES (${roundId}, ${cat.name_en}, ${cat.name_ga}, ${cIdx})
+          VALUES (${roundId}, ${catNameEn}, ${catNameGa}, ${cIdx})
           RETURNING id
         `;
         const catId = catResult[0].id;
+        console.log(`[DB] Category "${catNameEn}" inserted: ${catId} with ${cat.questions.length} questions`);
 
         // 4. Insert Questions
         for (let qIdx = 0; qIdx < cat.questions.length; qIdx++) {
           const q = cat.questions[qIdx];
+          const pts = typeof q.points === 'number' && q.points > 0 ? q.points : (qIdx + 1) * 100;
           await sql`
             INSERT INTO questions (
               category_id, points, clue_en, clue_ga, answer_en, answer_ga,
               explanation_en, explanation_ga, is_daily_double, position
             )
             VALUES (
-              ${catId}, ${q.points}, ${q.clue_en}, ${q.clue_ga}, ${q.answer_en}, ${q.answer_ga},
-              ${q.explanation_en || null}, ${q.explanation_ga || null}, ${q.isDailyDouble || false}, ${qIdx}
+              ${catId},
+              ${pts},
+              ${str(q.clue_en, 'Clue unavailable')},
+              ${str(q.clue_ga, 'Leide gan fáil')},
+              ${str(q.answer_en, 'What is the answer?')},
+              ${str(q.answer_ga, 'Cad é an freagra?')},
+              ${q.explanation_en ? str(q.explanation_en, '') : null},
+              ${q.explanation_ga ? str(q.explanation_ga, '') : null},
+              ${q.isDailyDouble || false},
+              ${qIdx}
             )
           `;
         }
       }
     }
 
+    console.log(`[DB] ✅ Game fully saved: ${gameId}`);
     return { success: true, gameId };
   } catch (err) {
     console.error('Failed to save game to Neon DB:', err);
+    // Clean up orphaned game row so the library stays tidy
+    if (gameId) {
+      try {
+        await sql`DELETE FROM games WHERE id = ${gameId}`;
+        console.warn(`[DB] Rolled back partial game insert: ${gameId}`);
+      } catch (cleanupErr) {
+        console.error('[DB] Rollback failed:', cleanupErr);
+      }
+    }
     return { success: false, error: (err as Error).message };
   }
 }

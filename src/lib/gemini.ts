@@ -274,6 +274,7 @@ Output must adhere strictly to this JSON format (pure JSON only, no markdown wra
           generationConfig: {
             temperature: 0.2,
             responseMimeType: 'application/json',
+            maxOutputTokens: 8192,
           },
         });
 
@@ -297,6 +298,70 @@ Output must adhere strictly to this JSON format (pure JSON only, no markdown wra
         const finalSubject = parsed.subject || detectedSubject;
         const finalDescription = userDescription || parsed.description || 'Bilingual game generated from Irish & English curriculum content';
 
+        // ── Robust normalizer: handles any key variation Gemini might return ──
+        const normalizeRounds = (rawRounds: unknown[], rCount: number) => {
+          const pointsByRound = [
+            [100, 200, 300, 400, 500],
+            [200, 400, 600, 800, 1000],
+            [300, 600, 900, 1200, 1500],
+          ];
+
+          return rawRounds.slice(0, rCount).map((raw, rIdx: number) => {
+            const r = raw as Record<string, unknown>;
+            const roundNum = (typeof r.roundNumber === 'number' ? r.roundNumber : typeof r.round_number === 'number' ? r.round_number : rIdx + 1);
+            const roundNameEn = (r.name_en ?? r.round_name_en ?? r.name ?? `Round ${roundNum}`) as string;
+            const roundNameGa = (r.name_ga ?? r.round_name_ga ?? r.name_irish ?? `Babhta ${roundNum}`) as string;
+
+            const rawCats: Record<string, unknown>[] = Array.isArray(r.categories) ? r.categories as Record<string, unknown>[] : [];
+            const pts = pointsByRound[rIdx] || pointsByRound[0];
+
+            const categories = rawCats.map((c: Record<string, unknown>, cIdx: number) => {
+              // Accept any plausible key name Gemini might emit
+              const nameEn = (
+                c.name_en ?? c.name ?? c.category_name ?? c.category ?? c.title ?? `Category ${cIdx + 1}`
+              ) as string;
+              const nameGa = (
+                c.name_ga ?? c.name_irish ?? c.category_ga ?? c.name_gle ?? c.gaeilge ?? c.irish ?? nameEn ?? `Catagóir ${cIdx + 1}`
+              ) as string;
+
+              const rawQs: Record<string, unknown>[] = Array.isArray(c.questions) ? c.questions as Record<string, unknown>[] : [];
+
+              const questions = rawQs.map((q: Record<string, unknown>, qIdx: number) => {
+                const ptVal = typeof q.points === 'number' ? q.points : pts[qIdx] ?? (qIdx + 1) * (rIdx + 1) * 100;
+                return {
+                  id: `q-${roundNum}-${cIdx + 1}-${qIdx + 1}`,
+                  points: ptVal,
+                  clue_en: ((q.clue_en ?? q.clue ?? q.question_en ?? q.question ?? 'Clue unavailable') as string).slice(0, 500),
+                  clue_ga: ((q.clue_ga ?? q.clue_irish ?? q.question_ga ?? q.clue_en ?? q.clue ?? 'Leide gan fáil') as string).slice(0, 500),
+                  answer_en: ((q.answer_en ?? q.answer ?? q.answer_english ?? 'What is the answer?') as string).slice(0, 500),
+                  answer_ga: ((q.answer_ga ?? q.answer_irish ?? q.answer_gle ?? q.answer_en ?? q.answer ?? 'Cad é an freagra?') as string).slice(0, 500),
+                  explanation_en: ((q.explanation_en ?? q.explanation ?? q.context_en ?? '') as string).slice(0, 500) || undefined,
+                  explanation_ga: ((q.explanation_ga ?? q.explanation_irish ?? q.context_ga ?? '') as string).slice(0, 500) || undefined,
+                  isDailyDouble: qIdx === 3 && cIdx === 2,
+                };
+              });
+
+              return {
+                id: `cat-${roundNum}-${cIdx + 1}`,
+                name_en: nameEn.slice(0, 255),
+                name_ga: nameGa.slice(0, 255),
+                questions,
+              };
+            });
+
+            return {
+              id: `round-${roundNum}`,
+              roundNumber: roundNum,
+              name_en: roundNameEn.slice(0, 100),
+              name_ga: roundNameGa.slice(0, 100),
+              categories,
+            };
+          });
+        };
+
+        const normalizedRounds = normalizeRounds(parsed.rounds || [], roundsCount);
+        console.log(`[Gemini] Parsed ${normalizedRounds.length} rounds, categories: ${normalizedRounds.map(r => r.categories.length).join(', ')}`);
+
         return {
           id: 'game-' + Date.now(),
           title: finalTitle,
@@ -305,28 +370,7 @@ Output must adhere strictly to this JSON format (pure JSON only, no markdown wra
           sourceFiles: options.sourceFiles || [],
           fallbackUsed: false,
           generationSource: 'gemini',
-          rounds: (parsed.rounds || []).map((r: { roundNumber: number; name_en: string; name_ga: string; categories: { name_en: string; name_ga: string; questions: { points: number; clue_en: string; clue_ga: string; answer_en: string; answer_ga: string; explanation_en?: string; explanation_ga?: string; }[] }[] }, rIdx: number) => ({
-            id: `round-${r.roundNumber || rIdx + 1}`,
-            roundNumber: r.roundNumber || rIdx + 1,
-            name_en: r.name_en || `Round ${rIdx + 1}`,
-            name_ga: r.name_ga || `Babhta ${rIdx + 1}`,
-            categories: (r.categories || []).map((c, cIdx: number) => ({
-              id: `cat-${rIdx + 1}-${cIdx + 1}`,
-              name_en: c.name_en,
-              name_ga: c.name_ga,
-              questions: (c.questions || []).map((q, qIdx: number) => ({
-                id: `q-${rIdx + 1}-${cIdx + 1}-${qIdx + 1}`,
-                points: q.points || (qIdx + 1) * 100,
-                clue_en: q.clue_en,
-                clue_ga: q.clue_ga,
-                answer_en: q.answer_en,
-                answer_ga: q.answer_ga,
-                explanation_en: q.explanation_en,
-                explanation_ga: q.explanation_ga,
-                isDailyDouble: qIdx === 3 && cIdx === 2
-              }))
-            }))
-          }))
+          rounds: normalizedRounds,
         };
       } catch (err) {
         const errMsg = (err as Error).message || '';
