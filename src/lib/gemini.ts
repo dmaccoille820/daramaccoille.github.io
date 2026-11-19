@@ -5,11 +5,55 @@ interface GenerateOptions {
   irishText: string;
   englishText: string;
   gameTitle?: string;
+  gameDescription?: string;
   roundsCount?: number;
   apiKey?: string;
   customInstructions?: string;
   allowFallback?: boolean;
   onProgress?: (stage: string) => void;
+}
+
+export function inferSubject(title = '', instructions = '', text = ''): string {
+  const combined = `${title} ${instructions} ${text}`.toLowerCase();
+  if (
+    combined.includes('eolaíocht') ||
+    combined.includes('science') ||
+    combined.includes('biology') ||
+    combined.includes('bitheolaíocht') ||
+    combined.includes('ceimic') ||
+    combined.includes('chemistry') ||
+    combined.includes('fisic') ||
+    combined.includes('physics')
+  ) {
+    return 'Science / Eolaíocht';
+  }
+  if (combined.includes('stair') || combined.includes('history')) {
+    return 'History / Stair';
+  }
+  if (combined.includes('tíreolaíocht') || combined.includes('geography')) {
+    return 'Geography / Tíreolaíocht';
+  }
+  if (combined.includes('mata') || combined.includes('math')) {
+    return 'Mathematics / Matamaitic';
+  }
+  if (combined.includes('gnó') || combined.includes('business') || combined.includes('eacnamaíocht') || combined.includes('economics')) {
+    return 'Business / Staidéar Gnó';
+  }
+  if (combined.includes('gaeilge') || combined.includes('irish language') || combined.includes('litríocht')) {
+    return 'Gaeilge';
+  }
+  if (
+    combined.includes('teicneolaíocht') ||
+    combined.includes('technology') ||
+    combined.includes('computer') ||
+    combined.includes('digital') ||
+    combined.includes('ríomhaireacht') ||
+    combined.includes('coding') ||
+    combined.includes('programming')
+  ) {
+    return 'Digital Technology';
+  }
+  return 'General Curriculum / Curaclam Ginearálta';
 }
 
 export function getGeminiApiKey(customKey?: string): string {
@@ -87,60 +131,92 @@ async function discoverSupportedModels(apiKey: string): Promise<string[]> {
 
 export async function generateBilingualJeopardy(options: GenerateOptions): Promise<JeopardyGame> {
   const apiKey = getGeminiApiKey(options.apiKey);
-  const roundsCount = Math.min(Math.max(options.roundsCount || 2, 1), 3);
-  const title = options.gameTitle || 'Digital Technology / Teicneolaíocht Dhigiteach';
+  const roundsCount = Math.min(Math.max(options.roundsCount || 3, 1), 3);
+  const userTitle = options.gameTitle?.trim() || '';
+  const userDescription = options.gameDescription?.trim() || '';
+  const customInstructions = options.customInstructions?.trim() || '';
+  const irishText = options.irishText?.trim() || '';
+  const englishText = options.englishText?.trim() || '';
+  const hasFactfiles = irishText.length > 0 || englishText.length > 0;
+
+  const titlePrompt = userTitle || 'Bilingual Jeopardy / Jeopardy Dátheangach';
+  const detectedSubject = inferSubject(userTitle, customInstructions, `${irishText} ${englishText}`);
 
   if (!apiKey) {
     console.warn('Gemini API key not found. Using intelligent curriculum template generator.');
-    return generateSmartTemplateGame(title, roundsCount, options.irishText, options.englishText);
+    return generateSmartTemplateGame(
+      titlePrompt,
+      userDescription,
+      detectedSubject,
+      roundsCount,
+      customInstructions,
+      options.irishText,
+      options.englishText
+    );
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
 
   const prompt = `
-You are a bilingual Irish-English Master Educator specializing in Irish secondary curriculum (Leaving Certificate and Junior Cycle Digital Technology and Computer Science).
-You will analyze two provided factfiles:
-1. Factfile in Gaeilge (Irish)
-2. Factfile in English
+You are a bilingual Irish-English Master Educator across all subjects in the Irish secondary curriculum (Junior Cycle and Leaving Certificate, including STEM, Humanities, Languages, Social Sciences, Business, and Digital Technologies).
 
-Generate an authentic, exciting bilingual Jeopardy game with exactly ${roundsCount} round(s).
-Crucial rules for fast, high-quality generation:
-1. Every category must have an accurate English name and authentic Irish name (using standard Téarma.ie terminology).
-2. For each round, create 4 distinct categories. Each category must have exactly 5 questions with point values:
-   - Round 1: 100, 200, 300, 400, 500
-   - Round 2: 200, 400, 600, 800, 1000
-   - Round 3 (Final Jeopardy style): 300, 600, 900, 1200, 1500
-   Each round must cover different aspects of the topic so rounds don't overlap.
-3. For every question provide:
-   - "points": number
-   - "clue_en": A crisp Jeopardy clue statement in English (maximum 20 words).
-   - "clue_ga": The direct, accurate Irish translation of that exact clue statement.
-   - "answer_en": Phrased as a question in English ("What is...", "Who is...", "What are...").
-   - "answer_ga": Phrased as a question in Irish ("Cad é...", "Céard é...", "Cé hé/hí...", "Cad iad...").
-   - "explanation_en": Brief 1-sentence context explanation.
-   - "explanation_ga": Brief 1-sentence context explanation in Irish.
-4. The English and Irish clues MUST correspond to the exact same concept so the teacher can press the "Hot Switch Language" button mid-question and switch seamlessly.
-5. Keep clues and answers concise and punchy so they render quickly and clearly in class.
+TASK: Generate an authentic, diverse, and engaging bilingual Jeopardy game with exactly ${roundsCount} round(s).
 
-Additional Teacher Instructions:
-${options.customInstructions || 'Focus on fundamental digital technology concepts from the factfiles.'}
+GAME PARAMETERS SPECIFIED BY THE TEACHER:
+- Title / Ábhar: "${titlePrompt}"
+${userDescription ? `- Description / Cur Síos: "${userDescription}"` : ''}
+${customInstructions ? `- Teacher's Custom Instructions ("Treoracha Breise"): "${customInstructions}"` : ''}
 
-Factfile (English):
-${options.englishText.slice(0, 8000)}
+${hasFactfiles ? `
+CURRICULUM FACTFILES PROVIDED BY TEACHER:
+${englishText ? `--- ENGLISH FACTFILE ---\n${englishText.slice(0, 9000)}\n` : ''}
+${irishText ? `--- GAEILGE (IRISH) FACTFILE ---\n${irishText.slice(0, 9000)}\n` : ''}
 
-Factfile (Gaeilge):
-${options.irishText.slice(0, 8000)}
+SOURCE INSTRUCTIONS:
+- You MUST extract the clues, questions, facts, and concepts directly from the provided factfile(s).
+- If only one language was provided (e.g. only English or only Irish), translate and align faithfully to create the counterpart language for all clues, answers, and category names.
+` : `
+NO FACTFILES ATTACHED (MANUAL PROMPT & INSTRUCTION CREATION PATH):
+- The teacher has NOT uploaded PDF factfiles. You MUST use the Game Title, Description, and Teacher's Custom Instructions ("Treoracha Breise") above as your syllabus brief.
+- Generate high-quality, authentic, diverse, and curriculum-aligned questions and categories covering this topic thoroughly.
+`}
+
+CRUCIAL RULES FOR AUTHENTIC BILINGUAL JEOPARDY:
+1. CATEGORIES:
+   - For each round, create 4 distinct, engaging, creative categories directly pertinent to the specified topic and curriculum (do NOT revert to generic computer hardware unless that is the requested topic).
+   - Each category MUST have an accurate English name ("name_en") and an authentic Irish translation/name ("name_ga") using appropriate terminology from Téarma.ie.
+2. ROUNDS & POINT PROGRESSION:
+   - Create exactly ${roundsCount} round(s).
+   - Each category in a round MUST contain exactly 5 questions with standard point values:
+     - Round 1: 100, 200, 300, 400, 500
+     - Round 2: 200, 400, 600, 800, 1000
+     - Round 3: 300, 600, 900, 1200, 1500
+   - Difficulty should increase smoothly with point value.
+3. QUESTIONS & DUAL-LANGUAGE HOT SWITCH ALIGNMENT:
+   - For every question provide:
+     - "points": number
+     - "clue_en": Concise Jeopardy clue statement in English (max 20 words).
+     - "clue_ga": The direct, accurate Irish translation of that exact clue statement.
+     - "answer_en": Phrased as a question in English ("What is...", "Who is...", "What are...", "Where is...").
+     - "answer_ga": Phrased as a question in Irish ("Cad é...", "Céard é...", "Cé hé/hí...", "Cad iad...", "Cá bhfuil...").
+     - "explanation_en": Brief 1-sentence explanatory context in English.
+     - "explanation_ga": Brief 1-sentence explanatory context in Irish.
+   - The English and Irish clues MUST correspond to the EXACT same concept so the teacher can hit the "Hot Switch Language" button mid-round and display seamlessly in either language.
+4. METADATA:
+   - "title": Use the teacher's title "${titlePrompt}" (or an authentic bilingual version if suitable).
+   - "subject": Identify the curriculum subject accurately (e.g. "Biology", "History", "Geography", "Digital Technology", "Business", "Gaeilge", "Science").
+   - "description": Provide an engaging, informative description summarizing what this game covers (incorporating the teacher's description if provided).
 
 Output must adhere strictly to this JSON format (pure JSON only, no markdown wrapping):
 {
-  "title": "${title}",
-  "subject": "Digital Technology",
-  "description": "Bilingual game generated from Irish & English factfiles",
+  "title": "${titlePrompt}",
+  "subject": "${detectedSubject}",
+  "description": "${userDescription || 'Cluiche dátheangach Jeopardy / Bilingual Jeopardy Game'}",
   "rounds": [
     {
       "roundNumber": 1,
       "name_en": "Jeopardy Round",
-      "name_ga": "Babhta Jeopardy",
+      "name_ga": "Babhta 1: Jeopardy",
       "categories": [
         {
           "name_en": "Category Name in English",
@@ -148,12 +224,12 @@ Output must adhere strictly to this JSON format (pure JSON only, no markdown wra
           "questions": [
             {
               "points": 100,
-              "clue_en": "English clue",
-              "clue_ga": "Irish clue",
+              "clue_en": "English clue statement",
+              "clue_ga": "Ráiteas leide i nGaeilge",
               "answer_en": "What is ...?",
               "answer_ga": "Cad é ...?",
-              "explanation_en": "Context...",
-              "explanation_ga": "Comhthéacs..."
+              "explanation_en": "Short context",
+              "explanation_ga": "Comhthéacs gairid"
             }
           ]
         }
@@ -214,11 +290,15 @@ Output must adhere strictly to this JSON format (pure JSON only, no markdown wra
 
         const parsed = JSON.parse(cleanJson);
 
+        const finalTitle = userTitle || parsed.title || titlePrompt;
+        const finalSubject = parsed.subject || detectedSubject;
+        const finalDescription = userDescription || parsed.description || 'Bilingual game generated from Irish & English curriculum content';
+
         return {
           id: 'game-' + Date.now(),
-          title: parsed.title || title,
-          subject: parsed.subject || 'Digital Technology',
-          description: parsed.description || 'AI Generated Bilingual Jeopardy Game',
+          title: finalTitle,
+          subject: finalSubject,
+          description: finalDescription,
           fallbackUsed: false,
           generationSource: 'gemini',
           rounds: (parsed.rounds || []).map((r: { roundNumber: number; name_en: string; name_ga: string; categories: { name_en: string; name_ga: string; questions: { points: number; clue_en: string; clue_ga: string; answer_en: string; answer_ga: string; explanation_en?: string; explanation_ga?: string; }[] }[] }, rIdx: number) => ({
@@ -278,7 +358,15 @@ Output must adhere strictly to this JSON format (pure JSON only, no markdown wra
   // If online models returned 503/504 or were unavailable and allowFallback is true:
   if (options.allowFallback !== false) {
     console.warn('Gemini online service unavailable or timed out (503/504). Automatically falling back to Curriculum Engine so classroom play is never blocked.');
-    const fallbackGame = generateSmartTemplateGame(title, roundsCount, options.irishText, options.englishText);
+    const fallbackGame = generateSmartTemplateGame(
+      titlePrompt,
+      userDescription,
+      detectedSubject,
+      roundsCount,
+      customInstructions,
+      options.irishText,
+      options.englishText
+    );
     fallbackGame.fallbackUsed = true;
     fallbackGame.generationSource = 'curriculum-engine';
     return fallbackGame;
@@ -290,12 +378,15 @@ Output must adhere strictly to this JSON format (pure JSON only, no markdown wra
 // Fallback generator when offline or no API key is specified yet
 function generateSmartTemplateGame(
   title: string,
+  description: string,
+  subject: string,
   roundsCount: number,
+  customInstructions: string,
   irishExcerpt: string,
   englishExcerpt: string
 ): JeopardyGame {
   const hasContent = irishExcerpt.length > 20 || englishExcerpt.length > 20;
-  const sampleSubtitle = hasContent ? '(Curriculum Factfile Engine)' : '(Sample Starter Game)';
+  const sampleSubtitle = hasContent ? '(Curriculum Factfile Engine)' : '';
   const clampedRounds = Math.min(Math.max(roundsCount, 1), 3);
 
   // All template content — 3 rounds × 4 categories × 5 questions each
@@ -470,11 +561,14 @@ function generateSmartTemplateGame(
     },
   ];
 
+  const gameTitle = title ? (sampleSubtitle ? `${title} ${sampleSubtitle}` : title) : `Digital Technology ${sampleSubtitle}`.trim();
+  const gameDesc = description || (hasContent ? 'Bilingual game generated from Irish & English curriculum factfiles' : 'Bilingual Jeopardy game ready for classroom interactive display.');
+
   return {
     id: 'game-demo-' + Date.now(),
-    title: `${title} ${sampleSubtitle}`,
-    subject: 'Digital Technology',
-    description: 'Bilingual game generated from curriculum factfiles ready for classroom interactive display.',
+    title: gameTitle,
+    subject: subject || 'General Curriculum',
+    description: gameDesc,
     fallbackUsed: true,
     generationSource: 'curriculum-engine',
     rounds: roundTemplates.slice(0, clampedRounds),

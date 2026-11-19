@@ -32,14 +32,13 @@ export const TeacherUpload: React.FC<TeacherUploadProps> = ({
 }) => {
   // Form state
   const [gameTitle, setGameTitle] = useState('Digital Technology / Teicneolaíocht Dhigiteach');
+  const [gameDescription, setGameDescription] = useState('');
   const [roundsCount, setRoundsCount] = useState<number>(3);
   const [irishFile, setIrishFile] = useState<File | null>(null);
   const [englishFile, setEnglishFile] = useState<File | null>(null);
   const [irishText, setIrishText] = useState('');
   const [englishText, setEnglishText] = useState('');
-  const [customInstructions, setCustomInstructions] = useState(
-    'Focus on Leaving Certificate and Junior Cycle Digital Technology, computer hardware, binary representations, networks and cybersecurity.'
-  );
+  const [customInstructions, setCustomInstructions] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const [allowFallback, setAllowFallback] = useState(true);
@@ -101,6 +100,8 @@ export const TeacherUpload: React.FC<TeacherUploadProps> = ({
   // Pre-fill sample factfile content for Digital Technology teachers
   const handleLoadSampleFactfiles = () => {
     setGameTitle('Digital Technology: Systems & Data / Teicneolaíocht Dhigiteach');
+    setGameDescription('Junior Cycle & Leaving Certificate Digital Technology: Computer architecture, storage units, logic gates, and cybersecurity.');
+    setCustomInstructions('Focus on Leaving Certificate Digital Technology terminology, CPU registers, logic gates, von Neumann architecture, and networking.');
     setIrishText(`TEICNEOLAÍOCHT DHIGITEACH - BILEOG FÍRICÍ
 1. Aonaid Stórála Sonraí:
 Is é an giotán (bit) an t-aonad stórála sonraí is lú, agus ní féidir leis ach luach 0 nó 1 a choinneáil. Cruthaíonn ocht ngiotán beart (byte) amháin. Tá 1,024 Meigibheart i nGigibheart (GB) amháin. Is cuimhne phríomhúil luaineach í RAM (Cuimhne Randamrochtana) a chailleann a chuid sonraí nuair a mhúchtar an chumhacht. Úsáideann tiomántáin soladstaide (SSDanna) sliseanna splaince gan aon pháirteanna gluaisteacha, rud a fhágann go bhfuil siad i bhfad níos tapúla ná gnáthdhioscaí crua (HDDanna).
@@ -165,9 +166,10 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
       );
 
       const formData = new FormData();
-      formData.append('gameTitle', gameTitle);
+      formData.append('gameTitle', gameTitle.trim() || 'Bilingual Jeopardy / Jeopardy Dátheangach');
+      formData.append('gameDescription', gameDescription.trim());
       formData.append('roundsCount', roundsCount.toString());
-      formData.append('customInstructions', customInstructions);
+      formData.append('customInstructions', customInstructions.trim());
       if (forceCurriculumEngine) {
         formData.append('forceCurriculumEngine', 'true');
       } else if (apiKey) {
@@ -351,43 +353,88 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
 
       {/* UPLOAD FORM */}
       <form onSubmit={handleGenerate} className="flex flex-col gap-6">
-        {/* Game Title & Rounds Setup */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-jeopardy-deep/90 p-5 rounded-2xl border border-blue-500/30">
-          <div className="md:col-span-2">
-            <label className="block text-xs font-bold uppercase tracking-wider text-blue-200 mb-1.5">
-              {language === 'ga' ? 'Teideal an Chluiche / Ábhar' : 'Game Title / Subject'}
-            </label>
-            <input
-              type="text"
-              required
-              value={gameTitle}
-              onChange={(e) => setGameTitle(e.target.value)}
-              placeholder="e.g. Digital Technology / Teicneolaíocht Dhigiteach"
-              className="w-full px-3.5 py-2 rounded-xl bg-black/60 border border-blue-500/40 text-white placeholder-slate-400 text-sm focus:outline-none focus:border-yellow-400 transition-colors"
-            />
+        {/* Game Title, Description & Rounds Setup */}
+        <div className="flex flex-col gap-4 bg-jeopardy-deep/90 p-5 rounded-2xl border border-blue-500/30">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="md:col-span-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-blue-200 mb-1.5 flex items-center justify-between">
+                <span>{language === 'ga' ? 'Teideal an Chluiche / Ábhar' : 'Game Title / Subject'}</span>
+                <span className="text-[10px] text-amber-300 font-semibold">{language === 'ga' ? 'Riachtanach' : 'Required'}</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={gameTitle}
+                onChange={(e) => setGameTitle(e.target.value)}
+                placeholder={language === 'ga' ? 'M.sh. Stair: Éirí Amach 1916 / Eolaíocht: Géineolaíocht / Teicneolaíocht Dhigiteach' : 'e.g. Science: Genetics / History: 1916 Rising / Digital Technology'}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-black/60 border border-blue-500/40 text-white placeholder-slate-400 text-sm focus:outline-none focus:border-yellow-400 transition-colors"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-blue-200 mb-1.5 flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-amber-400" />
+                <span>{language === 'ga' ? 'Líon na mBabhtaí (Uas. 3)' : 'Rounds (Max 3)'}</span>
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {[1, 2, 3].map((num) => (
+                  <button
+                    type="button"
+                    key={num}
+                    onClick={() => setRoundsCount(num)}
+                    className={`py-2 rounded-xl text-xs font-bold transition-all ${
+                      roundsCount === num
+                        ? 'bg-amber-500 text-jeopardy-dark shadow-gold-glow'
+                        : 'bg-blue-950/50 hover:bg-blue-900/50 text-blue-200 border border-blue-500/30'
+                    }`}
+                  >
+                    {num} {num === 1 ? 'Round' : 'Rounds'}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-blue-200 mb-1.5 flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-amber-400" />
-              <span>{language === 'ga' ? 'Líon na mBabhtaí (Uas. 3)' : 'Rounds (Max 3)'}</span>
+            <label className="block text-xs font-bold uppercase tracking-wider text-blue-200 mb-1.5 flex items-center justify-between">
+              <span>{language === 'ga' ? 'Cur Síos ar an gCluiche (Roghnach)' : 'Game Description (Optional)'}</span>
+              <span className="text-[10px] text-blue-300/60 font-normal">
+                {language === 'ga' ? 'Taispeánfar é i Mo Leabharlann' : 'Shown in My Games Library'}
+              </span>
             </label>
-            <div className="grid grid-cols-3 gap-2">
-              {[1, 2, 3].map((num) => (
-                <button
-                  type="button"
-                  key={num}
-                  onClick={() => setRoundsCount(num)}
-                  className={`py-2 rounded-xl text-xs font-bold transition-all ${
-                    roundsCount === num
-                      ? 'bg-amber-500 text-jeopardy-dark shadow-gold-glow'
-                      : 'bg-blue-950/50 hover:bg-blue-900/50 text-blue-200 border border-blue-500/30'
-                  }`}
-                >
-                  {num} {num === 1 ? 'Round' : 'Rounds'}
-                </button>
-              ))}
-            </div>
+            <input
+              type="text"
+              value={gameDescription}
+              onChange={(e) => setGameDescription(e.target.value)}
+              placeholder={language === 'ga' ? 'M.sh. Athbhreithniú don Ardteist ar phríomhchoincheapa, sainmhínithe agus foclóir' : 'e.g. Leaving Cert exam revision covering key concepts, vocabulary and case studies'}
+              className="w-full px-3.5 py-2 rounded-xl bg-black/60 border border-blue-500/30 text-white placeholder-slate-400 text-xs focus:outline-none focus:border-yellow-400/80 transition-colors"
+            />
+          </div>
+        </div>
+
+        {/* 2 Flexible Creation Pathways Banner */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+          <div className="p-3.5 rounded-xl bg-blue-950/40 border border-blue-500/30 flex items-start gap-2.5">
+            <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-bold font-mono text-[10px] shrink-0 mt-0.5">
+              {language === 'ga' ? 'MODH 1' : 'PATH 1'}
+            </span>
+            <p className="text-blue-200/90 leading-relaxed">
+              <strong>{language === 'ga' ? 'Treoracha Lámhleabhair: ' : 'Manual Instructions: '}</strong>
+              {language === 'ga'
+                ? 'Ní theastaíonn PDF! Cuir isteach Teideal agus "Treoracha Breise" thíos chun cluiche nua a chruthú láithreach.'
+                : 'No PDF needed! Enter a Title and "Curriculum Guidance" instructions below to generate a fresh game instantly.'}
+            </p>
+          </div>
+          <div className="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex items-start gap-2.5">
+            <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold font-mono text-[10px] shrink-0 mt-0.5">
+              {language === 'ga' ? 'MODH 2' : 'PATH 2'}
+            </span>
+            <p className="text-emerald-200/90 leading-relaxed">
+              <strong>{language === 'ga' ? 'Uaslódáil Bileoga Fíricí: ' : 'Upload Factfiles: '}</strong>
+              {language === 'ga'
+                ? 'Uaslódáil PDF Gaeilge agus/nó Béarla. Bainfidh Gemini ceisteanna agus catagóirí díreach as do chuid comhad.'
+                : 'Upload Irish and/or English PDFs. Gemini extracts aligned bilingual clues directly from your documents.'}
+            </p>
           </div>
         </div>
 
@@ -487,17 +534,22 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
         {/* Custom prompt instructions & Optional Gemini Key */}
         <div className="bg-jeopardy-deep/90 p-5 rounded-2xl border border-blue-500/30 flex flex-col gap-3">
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-blue-200 mb-1">
-              {language === 'ga'
-                ? 'Treoracha Breise don Mhúinteoir (Roghnach)'
-                : 'Curriculum Guidance / Custom Instructions'}
+            <label className="block text-xs font-bold uppercase tracking-wider text-blue-200 mb-1 flex items-center justify-between">
+              <span>{language === 'ga'
+                ? 'Treoracha Breise don Mhúinteoir (Treoracha Lámhleabhair)'
+                : 'Teacher Curriculum Guidance ("Treoracha Breise")'}</span>
+              <span className="text-[10px] text-amber-300/80 font-normal">
+                {language === 'ga' ? 'Curtha go díreach sa leid AI' : 'Injected directly into AI prompt'}
+              </span>
             </label>
-            <input
-              type="text"
+            <textarea
+              rows={3}
               value={customInstructions}
               onChange={(e) => setCustomInstructions(e.target.value)}
-              placeholder="e.g. Focus on memory, CPU registers, logic gates, and cybersecurity..."
-              className="w-full px-3.5 py-2 rounded-xl bg-black/60 border border-blue-500/30 text-white placeholder-slate-400 text-xs focus:outline-none"
+              placeholder={language === 'ga'
+                ? 'M.sh. Dírigh ar théarmaíocht don Ardteist, sainmhínithe eochrach, cás-staidéir, ceisteanna níos dúshlánaí i mbabhta 3, etc.'
+                : 'e.g. Focus on Leaving Certificate Higher Level syllabus, exam question formats, specific subtopics, case studies, or difficulty...'}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-black/60 border border-blue-500/30 text-white placeholder-slate-400 text-xs focus:outline-none focus:border-yellow-400 transition-colors"
             />
           </div>
 
@@ -561,7 +613,15 @@ The CPU (Central Processing Unit) is the computer's brain. It executes instructi
         <div className="flex flex-col items-center gap-3">
           <button
             type="submit"
-            disabled={loading || (!irishFile && !irishText && !englishFile && !englishText)}
+            disabled={
+              loading ||
+              (!gameTitle.trim() &&
+                !customInstructions.trim() &&
+                !irishFile &&
+                !irishText.trim() &&
+                !englishFile &&
+                !englishText.trim())
+            }
             className="w-full sm:w-auto px-8 py-4 rounded-2xl font-jeopardy text-lg sm:text-xl font-black uppercase tracking-wider bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-600 hover:from-amber-400 hover:to-yellow-300 text-jeopardy-dark shadow-gold-glow hover:scale-105 active:scale-95 disabled:opacity-40 disabled:scale-100 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3"
           >
             {loading ? (

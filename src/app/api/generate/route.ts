@@ -11,7 +11,8 @@ export async function POST(req: NextRequest) {
   try {
     let irishText = '';
     let englishText = '';
-    let gameTitle = 'Digital Technology / Teicneolaíocht Dhigiteach';
+    let gameTitle = 'Bilingual Jeopardy / Jeopardy Dátheangach';
+    let gameDescription = '';
     let roundsCount = 3;
     let customInstructions = '';
     let apiKey = '';
@@ -22,9 +23,10 @@ export async function POST(req: NextRequest) {
 
     if (contentType.includes('multipart/form-data')) {
       const formData = await req.formData();
-      gameTitle = (formData.get('gameTitle') as string) || gameTitle;
+      gameTitle = (formData.get('gameTitle') as string)?.trim() || gameTitle;
+      gameDescription = (formData.get('gameDescription') as string)?.trim() || '';
       roundsCount = parseInt((formData.get('roundsCount') as string) || '3', 10);
-      customInstructions = (formData.get('customInstructions') as string) || '';
+      customInstructions = (formData.get('customInstructions') as string)?.trim() || '';
       apiKey = (formData.get('apiKey') as string) || '';
       autoSave = formData.get('autoSave') !== 'false';
       forceCurriculumEngine = formData.get('forceCurriculumEngine') === 'true';
@@ -74,9 +76,10 @@ export async function POST(req: NextRequest) {
       const body = await req.json();
       irishText = body.irishText || '';
       englishText = body.englishText || '';
-      gameTitle = body.gameTitle || gameTitle;
+      gameTitle = body.gameTitle?.trim() || gameTitle;
+      gameDescription = body.gameDescription?.trim() || '';
       roundsCount = body.roundsCount || 3;
-      customInstructions = body.customInstructions || '';
+      customInstructions = body.customInstructions?.trim() || '';
       apiKey = body.apiKey || '';
       autoSave = body.autoSave !== false;
       forceCurriculumEngine = !!body.forceCurriculumEngine;
@@ -87,6 +90,7 @@ export async function POST(req: NextRequest) {
       irishText,
       englishText,
       gameTitle,
+      gameDescription,
       roundsCount,
       apiKey: forceCurriculumEngine ? 'SKIP_GEMINI' : apiKey,
       customInstructions,
